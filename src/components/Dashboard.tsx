@@ -448,14 +448,14 @@ function DailyTodos({
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             type="text"
-            placeholder="Person..."
+            placeholder="Employee..."
             value={personInput}
             onChange={(e) => setPersonInput(e.target.value)}
             style={{ ...inp, width: 120, fontSize: 13, height: 36, background: "#F5F5F4", flexShrink: 0 }}
           />
           <input
             type="text"
-            placeholder={todoTab === "daily" ? "Task specifics..." : "Manager task specifics..."}
+            placeholder={todoTab === "daily" ? "Tasks..." : "Tasks..."}
             value={todoTab === "daily" ? globalInput : mNote}
             onChange={(e) => todoTab === "daily" ? setGlobalInput(e.target.value) : setMNote(e.target.value)}
             onKeyDown={handleKeyDown}
