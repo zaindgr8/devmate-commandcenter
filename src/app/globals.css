@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #FAFAF9;
+  color: #1C1917;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D6D3D1; border-radius: 3px; }
+
+input, textarea, select { font-family: inherit; }
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #2563EB !important;
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+}
+
+button { cursor: pointer; border: none; background: none; font-family: inherit; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.anim-spin { animation: spin 1s linear infinite; }

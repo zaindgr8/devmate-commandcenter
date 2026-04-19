@@ -1,0 +1,202 @@
+{
+  "currentDate": "2026-04-19",
+  "days": {
+    "2026-04-19": {
+      "date": "2026-04-19",
+      "mainTasks": [
+        {
+          "id": "sleep",
+          "category": "Mandatory",
+          "name": "Sleep",
+          "status": "done",
+          "from": "01:00",
+          "to": "07:00",
+          "goalLink": ""
+        },
+        {
+          "id": "workout",
+          "category": "Mandatory",
+          "name": "Workout",
+          "status": "done",
+          "from": "07:30",
+          "to": "09:30",
+          "goalLink": ""
+        },
+        {
+          "id": "devmate",
+          "category": "Company",
+          "name": "Devmate Tasks",
+          "status": "done",
+          "from": "10:30",
+          "to": "14:30",
+          "goalLink": ""
+        },
+        {
+          "id": "content",
+          "category": "Misc",
+          "name": "Content Creation",
+          "status": "doing",
+          "from": "14:30",
+          "to": "16:00",
+          "goalLink": ""
+        },
+        {
+          "id": "learning",
+          "category": "Misc",
+          "name": "Learning",
+          "status": "not_started",
+          "from": "16:00",
+          "to": "17:30",
+          "goalLink": ""
+        }
+      ],
+      "subTasks": [],
+      "rating": 3,
+      "managerNotes": []
+    },
+    "2026-04-20": {
+      "date": "2026-04-20",
+      "mainTasks": [
+        {
+          "id": "sleep",
+          "category": "Mandatory",
+          "name": "Sleep",
+          "status": "not_started",
+          "from": "01:00",
+          "to": "07:00",
+          "goalLink": ""
+        },
+        {
+          "id": "workout",
+          "category": "Mandatory",
+          "name": "Workout",
+          "status": "not_started",
+          "from": "07:30",
+          "to": "09:30",
+          "goalLink": ""
+        },
+        {
+          "id": "devmate",
+          "category": "Company",
+          "name": "Devmate Tasks",
+          "status": "not_started",
+          "from": "10:30",
+          "to": "14:30",
+          "goalLink": ""
+        },
+        {
+          "id": "content",
+          "category": "Misc",
+          "name": "Content Creation",
+          "status": "not_started",
+          "from": "14:30",
+          "to": "16:00",
+          "goalLink": ""
+        },
+        {
+          "id": "learning",
+          "category": "Misc",
+          "name": "Learning",
+          "status": "not_started",
+          "from": "16:00",
+          "to": "17:30",
+          "goalLink": ""
+        }
+      ],
+      "subTasks": [],
+      "rating": 0,
+      "managerNotes": []
+    },
+    "2026-04-18": {
+      "date": "2026-04-18",
+      "mainTasks": [
+        {
+          "id": "sleep",
+          "category": "Mandatory",
+          "name": "Sleep",
+          "status": "not_started",
+          "from": "01:00",
+          "to": "07:00",
+          "goalLink": ""
+        },
+        {
+          "id": "workout",
+          "category": "Mandatory",
+          "name": "Workout",
+          "status": "not_started",
+          "from": "07:30",
+          "to": "09:30",
+          "goalLink": ""
+        },
+        {
+          "id": "devmate",
+          "category": "Company",
+          "name": "Devmate Tasks",
+          "status": "not_started",
+          "from": "10:30",
+          "to": "14:30",
+          "goalLink": ""
+        },
+        {
+          "id": "content",
+          "category": "Misc",
+          "name": "Content Creation",
+          "status": "not_started",
+          "from": "14:30",
+          "to": "16:00",
+          "goalLink": ""
+        },
+        {
+          "id": "learning",
+          "category": "Misc",
+          "name": "Learning",
+          "status": "not_started",
+          "from": "16:00",
+          "to": "17:30",
+          "goalLink": ""
+        }
+      ],
+      "subTasks": [],
+      "rating": 0,
+      "managerNotes": []
+    }
+  },
+  "goals": [
+    {
+      "id": "g1",
+      "title": "Instagram Followers",
+      "target": 5000,
+      "current": 1448,
+      "unit": "followers",
+      "color": "#E1306C"
+    },
+    {
+      "id": "g2",
+      "title": "AI Course Sales",
+      "target": 5000,
+      "current": 0,
+      "unit": "sales",
+      "color": "#2563EB"
+    },
+    {
+      "id": "g3",
+      "title": "App Sales",
+      "target": 5000,
+      "current": 0,
+      "unit": "sales",
+      "color": "#16A34A"
+    },
+    {
+      "id": "g4",
+      "title": "Revenue Target",
+      "target": 1000000,
+      "current": 0,
+      "unit": "$",
+      "color": "#F59E0B"
+    }
+  ],
+  "streaks": {
+    "sleep": 0,
+    "workout": 0
+  }
+}
