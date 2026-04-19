@@ -56,62 +56,14 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const setMainName = (id: string, name: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, name } : t) }));
   const setTime = (id: string, f: "from" | "to", v: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, [f]: v } : t) }));
 
-  const cycleSub = (groupId: string, itemId: string) => setDay((d) => ({
-    ...d,
-    subTasks: d.subTasks.map((g) => g.id === groupId
-      ? { ...g, items: g.items.map((i) => i.id === itemId ? { ...i, status: SCYCLE[(SCYCLE.indexOf(i.status) + 1) % 3] } : i) }
-      : g)
-  }));
   const delSub = (id: string) => setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }));
   const rate = (r: number) => setDay((d) => ({ ...d, rating: r }));
-
-  const addNote = (assignee: string, items: string[]) => {
-    if (items.length === 0) return;
-    setDay((d) => ({
-      ...d,
-      managerNotes: [...d.managerNotes, {
-        id: String(Date.now()),
-        date: state.currentDate,
-        items: items.map(txt => ({ id: Math.random().toString(36).substring(7), text: txt, status: "not_started" as Status })),
-        timestamp: Date.now(),
-        assignee
-      }]
-    }));
-    setMNote("");
-  };
-  const cycleNote = (groupId: string, itemId: string) => setDay((d) => ({
-    ...d,
-    managerNotes: d.managerNotes.map((g) => g.id === groupId
-      ? { ...g, items: g.items.map((i) => i.id === itemId ? { ...i, status: SCYCLE[(SCYCLE.indexOf(i.status) + 1) % 3] } : i) }
-      : g)
-  }));
   const delNote = (id: string) => setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }));
-
-  const normalizedSubTasks = day.subTasks.map(t => {
-    if ((t as any).items) return t;
-    return {
-      id: t.id,
-      parentId: (t as any).parentId || "",
-      assignee: (t as any).assignee || "General",
-      items: [{ id: t.id + "-m", text: (t as any).text || "Task", status: (t as any).status || "not_started" as Status }]
-    };
-  });
-  const normalizedManagerNotes = day.managerNotes.map(n => {
-    if ((n as any).items) return n;
-    return {
-      id: n.id,
-      date: n.date,
-      timestamp: n.timestamp,
-      assignee: (n as any).assignee || "General",
-      items: [{ id: n.id + "-m", text: (n as any).content || "Note", status: (n as any).status || "not_started" as Status }]
-    };
-  });
 
   const doneM = day.mainTasks.filter((t) => t.status === "done").length;
   
-  const allS = normalizedSubTasks.flatMap(s => s.items);
-  const doneS = allS.filter(i => i.status === "done").length;
-  const totalS = allS.length;
+  const doneS = day.subTasks.filter(i => i.status === "done").length;
+  const totalS = day.subTasks.length;
 
   const grouped = day.mainTasks.reduce((a, t) => { (a[t.category] ??= []).push(t); return a; }, {} as Record<string, MainTask[]>);
 
@@ -190,7 +142,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                      <div style={{ width: 1, height: 32, background: "#E7E5E4" }} />
                      <div style={{ textAlign: "center" }}>
                        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Fraunces', serif" }}>{doneS}/{totalS}</div>
-                       <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Zain Todos</div>
+                       <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Daily Todos</div>
                      </div>
 
                    </div>
