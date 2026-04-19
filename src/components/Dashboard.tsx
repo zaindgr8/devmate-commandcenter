@@ -27,6 +27,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const [state, setState] = useState<AppState | null>(null);
   const [tab, setTab] = useState<"tasks" | "goals" | "history">("tasks");
   const [mNote, setMNote] = useState("");
+  const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
 
   useEffect(() => { 
     loadState().then(data => setState(data)); 
@@ -294,7 +295,28 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   {state.goals.map((goal) => {
                     const pct = Math.min(100, Math.round((goal.current / goal.target) * 100)) || 0;
                     return (
-                      <div key={goal.id} style={{ ...card, padding: "16px" }}>
+                      <div 
+                        key={goal.id} 
+                        draggable
+                        onDragStart={(e) => { 
+                          setDraggedGoal(goal.id); 
+                          e.dataTransfer.effectAllowed = "move"; 
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (draggedGoal && draggedGoal !== goal.id) {
+                            const newGoals = [...state.goals];
+                            const sIdx = newGoals.findIndex(g => g.id === draggedGoal);
+                            const tIdx = newGoals.findIndex(g => g.id === goal.id);
+                            const [rem] = newGoals.splice(sIdx, 1);
+                            newGoals.splice(tIdx, 0, rem);
+                            save({ ...state, goals: newGoals });
+                          }
+                          setDraggedGoal(null);
+                        }}
+                        style={{ ...card, padding: "16px", cursor: "grab", opacity: draggedGoal === goal.id ? 0.5 : 1 }}
+                      >
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#1C1917", marginBottom: 8 }}>{goal.title}</div>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 12 }}>
                           <span style={{ fontSize: 20, fontWeight: 700, color: goal.color || "#2563EB", fontFamily: "'Fraunces', serif" }}>
