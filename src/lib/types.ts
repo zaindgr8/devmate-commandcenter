@@ -19,8 +19,8 @@ export interface TodoItem {
 export interface SubTask {
   id: string;
   parentId: string; // mainTask id
-  items: TodoItem[];
-  assignee: string; // Person Name
+  text: string;
+  status: Status;
 }
 
 export interface Goal {
@@ -35,9 +35,9 @@ export interface Goal {
 export interface ManagerNote {
   id: string;
   date: string;
-  items: TodoItem[]; // Hierarchical items
+  content: string;
+  status: Status;
   timestamp: number;
-  assignee: string; // Person Name
 }
 
 export interface DayData {
