@@ -5,7 +5,7 @@ import {
   Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare,
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
-import { AppState, MainTask, SubTask, Status, User } from "@/lib/types";
+import { AppState, MainTask, SubTask, ManagerNote, Status, User } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
 

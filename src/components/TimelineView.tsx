@@ -59,7 +59,7 @@ export default function TimelineView({ tasks }: { tasks: MainTask[] }) {
         <div style={{ display: "flex", gap: 14 }}>
           {[{ l: "Not Started", c: "#E7E5E4" }, { l: "Doing", c: "#D97706" }, { l: "Done", c: "#16A34A" }].map((x) => (
             <div key={x.l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 8, height: 8, borderRadius: 2, background: x.c, border: x.border || "none" }} />
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: x.c }} />
               <span style={{ fontSize: 10, color: "#A8A29E" }}>{x.l}</span>
             </div>
           ))}
