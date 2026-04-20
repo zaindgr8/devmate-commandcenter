@@ -56,15 +56,22 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const cycleMain = (id: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, status: SCYCLE[(SCYCLE.indexOf(t.status) + 1) % 3] } : t) }));
   const setMainName = (id: string, name: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, name } : t) }));
   const setTime = (id: string, f: "from" | "to", v: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, [f]: v } : t) }));
+  const delMain = (id: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }));
+  const addMain = (category: "Mandatory" | "Company" | "Misc") => setDay((d) => ({ ...d, mainTasks: [...d.mainTasks, { id: "t_" + Date.now(), category, name: "New Task", status: "not_started", from: "12:00", to: "13:00", goalLink: "" }] }));
+  const setCategoryLabel = (cat: string, label: string) => save({ ...state, categoryLabels: { ...(state.categoryLabels || {}), [cat]: label } });
 
   const delSub = (id: string) => setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }));
   const rate = (r: number) => setDay((d) => ({ ...d, rating: r }));
   const delNote = (id: string) => setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }));
 
-  const doneM = day.mainTasks.filter((t) => t.status === "done").length;
-  
+  const actionableMainTasks = day.mainTasks.filter(t => t.name.toLowerCase() !== "sleep");
+  const doneM = actionableMainTasks.filter((t) => t.status === "done").length;
+  const totalM = actionableMainTasks.length;
   const doneS = day.subTasks.filter(i => i.status === "done").length;
   const totalS = day.subTasks.length;
+
+  const doneF = day.managerNotes.filter(n => n.status === "done").length;
+  const totalF = day.managerNotes.length;
 
   const grouped = day.mainTasks.reduce((a, t) => { (a[t.category] ??= []).push(t); return a; }, {} as Record<string, MainTask[]>);
 
@@ -72,7 +79,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const sidebar: React.CSSProperties = { width: 240, flexShrink: 0, display: "flex", flexDirection: "column", padding: 24, background: "#fff", borderRight: "1px solid #F0EEEC", height: "100vh", position: "sticky", top: 0 };
   const navBtn = (active: boolean): React.CSSProperties => ({ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: active ? "#EFF6FF" : "transparent", color: active ? "#2563EB" : "#78716C", transition: "all 0.15s", textAlign: "left" });
   const card: React.CSSProperties = { background: "#fff", borderRadius: 12, border: "1px solid #F0EEEC", boxShadow: "0 1px 2px rgba(28,25,23,0.04)" };
-  const gridCols = "130px 1fr 220px";
+  const gridCols = "130px 1fr 220px 30px";
   const inp: React.CSSProperties = { fontSize: 12, padding: "5px 8px", borderRadius: 8, background: "#FAFAF9", border: "1px solid #E7E5E4", color: "#1C1917" };
 
   return (
@@ -137,7 +144,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12 }}>
                    <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                      <div style={{ textAlign: "center" }}>
-                       <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Fraunces', serif" }}>{doneM}/{day.mainTasks.length}</div>
+                       <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Fraunces', serif" }}>{doneM}/{totalM}</div>
                        <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Main Tasks</div>
                      </div>
                      <div style={{ width: 1, height: 32, background: "#E7E5E4" }} />
@@ -145,12 +152,16 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                        <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Fraunces', serif" }}>{doneS}/{totalS}</div>
                        <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Daily Todos</div>
                      </div>
-
+                     <div style={{ width: 1, height: 32, background: "#E7E5E4" }} />
+                     <div style={{ textAlign: "center" }}>
+                       <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Fraunces', serif" }}>{doneF}/{totalF}</div>
+                       <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Fatima Todos</div>
+                     </div>
                    </div>
                    {/* Global Progress Bar */}
                    {(() => {
-                      const total = day.mainTasks.length + totalS;
-                      const done = doneM + doneS;
+                      const total = totalM + totalS + totalF;
+                      const done = doneM + doneS + doneF;
                       const pct = total > 0 ? (done / total) * 100 : 0;
                       return (
                         <div style={{ width: 160 }}>
@@ -167,14 +178,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                  </div>
                </div>
 
-              {/* Streaks */}
-              {(state.streaks.sleep > 0 || state.streaks.workout > 0) && (
-                <div style={{ display: "flex", alignItems: "center", gap: 20, padding: "10px 16px", borderRadius: 10, background: "#FFFBEB", border: "1px solid #FDE68A", marginBottom: 18 }}>
-                  <Flame size={15} color="#F59E0B" />
-                  {state.streaks.sleep > 0 && <span style={{ fontSize: 12 }}><b>Sleep:</b> {state.streaks.sleep} day streak 🔥</span>}
-                  {state.streaks.workout > 0 && <span style={{ fontSize: 12 }}><b>Workout:</b> {state.streaks.workout} day streak 🔥</span>}
-                </div>
-              )}
+
 
               {/* Timeline */}
               <TimelineView tasks={day.mainTasks} />
@@ -213,14 +217,16 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   if (!tasks) return null;
                   return (
                     <div key={cat}>
-                      <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E", marginBottom: 8 }}>
-                        {CATLABEL[cat]}
-                      </h3>
+                      <input 
+                        value={(state.categoryLabels || {})[cat] || CATLABEL[cat]}
+                        onChange={(e) => setCategoryLabel(cat, e.target.value)}
+                        style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E", marginBottom: 8, background: "transparent", border: "none", outline: "none", width: "100%", padding: 0 }}
+                      />
 
                       <div style={{ ...card, overflow: "hidden" }}>
                         <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 16, padding: "8px 16px", background: "#F9FAFB", borderBottom: "1px solid #F0EEEC" }}>
-                          {["Status", "Task", "Time"].map((h) => (
-                            <span key={h} style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>{h}</span>
+                          {["Status", "Task", "Time", ""].map((h, idx) => (
+                            <span key={idx} style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>{h}</span>
                           ))}
                         </div>
 
@@ -233,11 +239,17 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                               <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 16, alignItems: "center", padding: "10px 16px", borderBottom: last ? "none" : "1px solid #F0EEEC" }}>
                                 {/* Status */}
                                 <div>
-                                  <button onClick={() => cycleMain(task.id)}
-                                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 14, fontSize: 11, fontWeight: 600, background: SCOLOR[task.status].bg, color: SCOLOR[task.status].fg, transition: "all 0.15s" }}>
-                                    {task.status === "done" ? <CheckCircle2 size={12} /> : task.status === "doing" ? <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#D97706" }} /> : <Circle size={12} />}
-                                    {SLABEL[task.status]}
-                                  </button>
+                                  {task.name.toLowerCase() === "sleep" ? (
+                                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 14, fontSize: 11, fontWeight: 600, background: "#F5F5F4", color: "#A8A29E" }}>
+                                      Routine
+                                    </span>
+                                  ) : (
+                                    <button onClick={() => cycleMain(task.id)}
+                                      style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 14, fontSize: 11, fontWeight: 600, background: SCOLOR[task.status].bg, color: SCOLOR[task.status].fg, transition: "all 0.15s" }}>
+                                      {task.status === "done" ? <CheckCircle2 size={12} /> : task.status === "doing" ? <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#D97706" }} /> : <Circle size={12} />}
+                                      {SLABEL[task.status]}
+                                    </button>
+                                  )}
                                 </div>
                                 {/* Name */}
                                 <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
@@ -259,12 +271,22 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                                   <span style={{ fontSize: 10, color: "#A8A29E" }}>–</span>
                                   <input type="time" value={task.to} onChange={(e) => setTime(task.id, "to", e.target.value)} style={{ ...inp, minWidth: 90 }} />
                                 </div>
+                                {/* Actions */}
+                                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                  <button onClick={() => delMain(task.id)} style={{ padding: 4, borderRadius: 6, opacity: 0.5, transition: "opacity 0.15s", cursor: "pointer" }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")} onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}>
+                                    <Trash2 size={13} color="#EF4444" />
+                                  </button>
+                                </div>
                               </div>
-
-
                             </div>
                           );
                         })}
+                        <div style={{ padding: "8px 16px", borderTop: "1px solid #F0EEEC", background: "#FAFAF9" }}>
+                          <button onClick={() => addMain(cat)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>
+                            <Plus size={12} /> Add Task
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );

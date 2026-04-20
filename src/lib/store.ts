@@ -32,7 +32,7 @@ const DEFAULT_GOALS = [
 export async function loadState(): Promise<AppState> {
   if (typeof window === "undefined") {
     const td = getToday();
-    return { currentDate: td, days: {}, goals: [...DEFAULT_GOALS], streaks: {} };
+    return { currentDate: td, days: {}, goals: [...DEFAULT_GOALS], streaks: {}, categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" } };
   }
   
   try {
@@ -50,6 +50,9 @@ export async function loadState(): Promise<AppState> {
         ...def,
         current: storedGoalMap[def.id] !== undefined ? storedGoalMap[def.id] : def.current,
       }));
+      if (!parsed.categoryLabels) {
+        parsed.categoryLabels = { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" };
+      }
       return parsed;
     }
   } catch(err) {
@@ -72,7 +75,9 @@ export async function loadState(): Promise<AppState> {
          ...def,
          current: storedGoalMap[def.id] !== undefined ? storedGoalMap[def.id] : def.current,
        }));
-       
+       if (!parsed.categoryLabels) {
+         parsed.categoryLabels = { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" };
+       }
        saveState(parsed);
        return parsed;
      }
@@ -84,6 +89,7 @@ export async function loadState(): Promise<AppState> {
     days: { [td]: createDayData(td) },
     goals: [...DEFAULT_GOALS],
     streaks: { sleep: 0, workout: 0 },
+    categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" }
   };
 }
 

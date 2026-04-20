@@ -112,13 +112,13 @@ export default function TimelineView({ tasks }: { tasks: MainTask[] }) {
                 <div
                   style={{
                     position: "absolute", left: `${left}%`, width: `${width}%`, top: 0, height: 22,
-                    borderRadius: 6, background: BAR_BG[t.status], display: "flex", alignItems: "center",
+                    borderRadius: 6, background: t.name.toLowerCase() === "sleep" ? BAR_BG["not_started"] : BAR_BG[t.status], display: "flex", alignItems: "center",
                     paddingLeft: 8, paddingRight: 8, overflow: "hidden", transition: "all 0.3s",
                     boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                   }}
                   title={`${t.name}: ${t.from} – ${t.to}`}
                 >
-                  <span style={{ fontSize: 10, fontWeight: 600, color: BAR_FG[t.status], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: "100%" }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: t.name.toLowerCase() === "sleep" ? BAR_FG["not_started"] : BAR_FG[t.status], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: "100%" }}>
                     {t.name}
                   </span>
                 </div>

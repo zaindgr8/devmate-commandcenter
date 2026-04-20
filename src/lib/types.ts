@@ -53,6 +53,7 @@ export interface AppState {
   days: Record<string, DayData>;
   goals: Goal[];
   streaks: Record<string, number>; // task id -> streak count
+  categoryLabels?: Record<string, string>;
 }
 
 export type UserRole = "owner" | "manager";
