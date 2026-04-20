@@ -21,6 +21,8 @@ export interface SubTask {
   parentId: string; // mainTask id
   text: string;
   status: Status;
+  employee?: string;
+  chips?: { text: string; status: Status }[];
 }
 
 export interface Goal {
@@ -38,6 +40,8 @@ export interface ManagerNote {
   content: string;
   status: Status;
   timestamp: number;
+  employee?: string;
+  chips?: { text: string; status: Status }[];
 }
 
 export interface DayData {
