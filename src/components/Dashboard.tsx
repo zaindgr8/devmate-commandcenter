@@ -2,12 +2,14 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon,
+  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon,
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
 import { AppState, MainTask, SubTask, ManagerNote, Status, User } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
+import AppTrackerPanel from "./AppTrackerPanel";
+import ContentCreationPanel from "./ContentCreationPanel";
 
 const SCYCLE: Status[] = ["not_started", "doing", "done"];
 const SLABEL: Record<Status, string> = { not_started: "Not Started", doing: "Doing", done: "Done" };
@@ -25,7 +27,7 @@ function greeting() { const h = new Date().getHours(); return h < 12 ? "Good Mor
 
 export default function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [state, setState] = useState<AppState | null>(null);
-  const [tab, setTab] = useState<"tasks" | "goals" | "history">("tasks");
+  const [tab, setTab] = useState<"tasks" | "goals" | "apptracker" | "content" | "history">("tasks");
   const [mNote, setMNote] = useState("");
   const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
 
@@ -177,7 +179,25 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
         </div>
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1 }}>
-          {([["tasks", LayoutDashboard, "Daily Tasks"], ["goals", Target, "Goal Tracker"]] as const).map(([id, Icon, label]) => (
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E", marginTop: 8, marginBottom: 8, paddingLeft: 12 }}>
+            Roadmap
+          </div>
+          {([
+            ["tasks", LayoutDashboard, "Daily Tasks"],
+            ["goals", Target, "Goal Tracker"],
+          ] as const).map(([id, Icon, label]) => (
+            <button key={id} onClick={() => setTab(id as any)} style={navBtn(tab === id)}>
+              <Icon size={17} /> {label}
+            </button>
+          ))}
+
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E", marginTop: 24, marginBottom: 8, paddingLeft: 12 }}>
+            Tracker
+          </div>
+          {([
+            ["apptracker", Smartphone, "App Tracker"],
+            ["content", ImageIcon, "Content Tracker"],
+          ] as const).map(([id, Icon, label]) => (
             <button key={id} onClick={() => setTab(id as any)} style={navBtn(tab === id)}>
               <Icon size={17} /> {label}
             </button>
@@ -468,6 +488,12 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           {/* ═══ GOALS TAB ═══ */}
           {tab === "goals" && <GoalPanel state={state} onSave={save} />}
 
+          {/* ═══ APP TRACKER TAB ═══ */}
+          {tab === "apptracker" && <AppTrackerPanel state={state} onSave={save} />}
+
+          {/* ═══ CONTENT CREATION TAB ═══ */}
+          {tab === "content" && <ContentCreationPanel state={state} onSave={save} />}
+
           {/* ═══ HISTORY TAB ═══ */}
           {tab === "history" && <HistoryView state={state} onGo={(d) => { save({ ...state, currentDate: d }); setTab("tasks"); }} />}
           </div>
@@ -479,6 +505,39 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
                   <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Goals Overview</h3>
                 </div>
+
+                {/* Apps Summary Section */}
+                {state.appTrackers && state.appTrackers.length > 0 && (
+                  <div style={{ marginBottom: 24 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+                      <Smartphone size={12} color="#A8A29E" />
+                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Apps Progress</span>
+                    </div>
+                    {state.appTrackers.map(tracker => {
+                      const live = tracker.apps.filter(a => a.status === "Live").length;
+                      const total = tracker.apps.length;
+                      const dls = tracker.apps.reduce((s, a) => s + (a.downloads || 0), 0);
+                      const pct = total > 0 ? (live / total) * 100 : 0;
+                      return (
+                        <div key={tracker.id} style={{ ...card, padding: 12, marginBottom: 8, background: "linear-gradient(135deg, #fff 0%, #FAFAF9 100%)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#1C1917" }}>{tracker.title}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "#16A34A" }}>
+                              <Download size={10} /> {dls.toLocaleString()}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontWeight: 700, color: "#78716C", marginBottom: 4 }}>
+                            <span>{live} / {total} LIVE</span>
+                            <span>{Math.round(pct)}%</span>
+                          </div>
+                          <div style={{ height: 4, borderRadius: 2, background: "#F1F5F9" }}>
+                            <div style={{ height: "100%", borderRadius: 2, background: "#16A34A", width: `${pct}%`, transition: "width 0.5s" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {state.goals.map((goal) => {
                     const pct = Math.min(100, Math.round((goal.current / goal.target) * 100)) || 0;

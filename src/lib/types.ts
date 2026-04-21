@@ -52,12 +52,37 @@ export interface DayData {
   managerNotes: ManagerNote[];
 }
 
+export type AppStatus = "In Development" | "In Review" | "Live" | "Paused" | "Idea";
+
+export interface AppEntry {
+  id: string;
+  name: string;
+  status: AppStatus;
+  downloads: number;
+}
+
+export interface AppTracker {
+  id: string;
+  title: string;
+  apps: AppEntry[];
+}
+
+export interface ProjectResource {
+  id: string;
+  name: string;
+  url: string;
+  category: string;
+}
+
 export interface AppState {
   currentDate: string;
   days: Record<string, DayData>;
   goals: Goal[];
   streaks: Record<string, number>; // task id -> streak count
   categoryLabels?: Record<string, string>;
+  appTrackers?: AppTracker[];
+  projectResources?: ProjectResource[];
+  contentPostedDates?: string[]; // Array of date strings like "2026-04-21"
 }
 
 export type UserRole = "owner" | "manager";

@@ -376,5 +376,27 @@
     "Mandatory": "Mandatory",
     "Company": "Company Tasks",
     "Misc": "Misc"
-  }
+  },
+  "appTrackers": [
+    {
+      "id": "tr_1776792505972",
+      "title": "My Apps",
+      "apps": [
+        {
+          "id": "a_1776792505972",
+          "name": "Manifestation",
+          "status": "In Review",
+          "downloads": 0
+        },
+        {
+          "id": "a_1776792525655",
+          "name": "Reveal AI",
+          "status": "In Development",
+          "downloads": 0
+        }
+      ]
+    }
+  ],
+  "projectResources": [],
+  "contentPostedDates": []
 }
