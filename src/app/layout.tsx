@@ -4,6 +4,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Devmate Command Center",
   description: "Daily operations hub for Devmate Solutions",
+  icons: {
+    icon: "/logo_2.png",
+    apple: "/logo_2.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

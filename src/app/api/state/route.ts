@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server';
-import { kv } from '@vercel/kv';
+import fs from 'fs/promises';
+import path from 'path';
+
+const dbPath = path.join(process.cwd(), 'database.json');
 
 export async function GET() {
   try {
-    const data = await kv.get('devmate_app_state');
+    const data = await fs.readFile(dbPath, 'utf8');
     if (data) {
-      return NextResponse.json(data);
+      return NextResponse.json(JSON.parse(data));
     }
   } catch (err) {
-    console.error("Failed to read from KV", err);
+    console.error("Failed to read from database.json", err);
   }
   return NextResponse.json(null);
 }
@@ -16,10 +19,10 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const data = await req.json();
-    await kv.set('devmate_app_state', data);
+    await fs.writeFile(dbPath, JSON.stringify(data, null, 2), 'utf8');
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Failed to write to KV", err);
+    console.error("Failed to write to database.json", err);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }
