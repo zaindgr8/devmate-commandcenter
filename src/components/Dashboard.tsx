@@ -322,13 +322,17 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                 onEditChip={(id, list, chipIdx, newText) => {
                   if (list === "daily") {
                     setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => {
-                      if (s.id !== id || !s.chips) return s;
+                      if (s.id !== id) return s;
+                      if (chipIdx === -1) return { ...s, text: newText };
+                      if (!s.chips) return s;
                       const nc = s.chips.map((c, i) => i === chipIdx ? { ...c, text: newText } : c);
                       return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
                     }) }));
                   } else {
                     setDay((d) => ({ ...d, managerNotes: d.managerNotes.map((n) => {
-                      if (n.id !== id || !n.chips) return n;
+                      if (n.id !== id) return n;
+                      if (chipIdx === -1) return { ...n, content: newText };
+                      if (!n.chips) return n;
                       const nc = n.chips.map((c, i) => i === chipIdx ? { ...c, text: newText } : c);
                       return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
                     }) }));
@@ -982,22 +986,14 @@ function DailyTodos({
                           onChange={(e) => setEditingChipText(e.target.value)}
                           onBlur={() => {
                             if (editingChip && editingChipText.trim()) {
-                              if (todoTab === "daily") {
-                                setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => s.id === item.id ? { ...s, text: editingChipText } : s) }));
-                              } else {
-                                setDay((d) => ({ ...d, managerNotes: d.managerNotes.map((n) => n.id === item.id ? { ...n, content: editingChipText } : n) }));
-                              }
+                              onEditChip(item.id, todoTab, -1, editingChipText);
                             }
                             setEditingChip(null);
                           }}
                           onKeyDown={(e) => { 
                             if (e.key === "Enter") {
                               if (editingChipText.trim()) {
-                                if (todoTab === "daily") {
-                                  setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => s.id === item.id ? { ...s, text: editingChipText } : s) }));
-                                } else {
-                                  setDay((d) => ({ ...d, managerNotes: d.managerNotes.map((n) => n.id === item.id ? { ...n, content: editingChipText } : n) }));
-                                }
+                                onEditChip(item.id, todoTab, -1, editingChipText);
                               }
                               setEditingChip(null);
                             }
