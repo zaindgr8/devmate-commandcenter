@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon,
+  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
 import { AppState, MainTask, SubTask, ManagerNote, Status, User } from "@/lib/types";
@@ -35,8 +35,11 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     loadState().then(data => setState(data)); 
   }, []);
 
-  const save = useCallback((s: AppState) => {
-    s.streaks = calculateStreaks(s.days);
+  // saveState is now synchronous (debounces the network call internally)
+  // calculateStreaks is expensive — only compute it when explicitly needed,
+  // not on every keystroke. Pass `withStreaks=true` only on day/status changes.
+  const save = useCallback((s: AppState, withStreaks = false) => {
+    if (withStreaks) s.streaks = calculateStreaks(s.days);
     setState(s);
     saveState(s);
   }, []);
@@ -51,7 +54,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     const nd = d.toISOString().slice(0, 10);
     const ns = { ...state, currentDate: nd };
     if (!ns.days[nd]) ns.days[nd] = createDayData(nd);
-    save(ns);
+    save(ns); // no streak recalc needed on navigation
   };
 
   const doneForToday = () => {
@@ -135,9 +138,14 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
     save({ ...state, days: { ...state.days, [todayKey]: updatedToday, [nextKey]: updatedNext }, currentDate: nextKey });
   };
+  // setDay: used for text edits, chip adds, etc. — no streak recalc
   const setDay = (fn: (d: typeof day) => typeof day) => save({ ...state, days: { ...state.days, [state.currentDate]: fn({ ...day }) } });
 
-  const cycleMain = (id: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, status: SCYCLE[(SCYCLE.indexOf(t.status) + 1) % 3] } : t) }));
+  // cycleMain changes status (sleep/workout streak tracking) — recalc streaks here
+  const cycleMain = (id: string) => {
+    const updated = { ...state, days: { ...state.days, [state.currentDate]: { ...day, mainTasks: day.mainTasks.map((t) => t.id === id ? { ...t, status: SCYCLE[(SCYCLE.indexOf(t.status) + 1) % 3] } : t) } } };
+    save(updated, true); // withStreaks=true only on status cycle
+  };
   const setMainName = (id: string, name: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, name } : t) }));
   const setTime = (id: string, f: "from" | "to", v: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, [f]: v } : t) }));
   const delMain = (id: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }));
@@ -202,6 +210,18 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
               <Icon size={17} /> {label}
             </button>
           ))}
+
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E", marginTop: 24, marginBottom: 8, paddingLeft: 12 }}>
+            Management
+          </div>
+          <a 
+            href="https://devmatefinancecenter.vercel.app/" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            style={{ ...navBtn(false), textDecoration: "none" }}
+          >
+            <Banknote size={17} /> Finance Center
+          </a>
         </nav>
 
         <div style={{ paddingTop: 16, borderTop: "1px solid #F0EEEC" }}>
@@ -790,19 +810,17 @@ function DailyTodos({
             title={`Carry ${doingCount} 'Doing' task${doingCount > 1 ? 's' : ''} to tomorrow`}
             style={{
               display: "inline-flex", alignItems: "center", gap: 6,
-              padding: "6px 14px", borderRadius: 20, marginBottom: 6,
-              fontSize: 11, fontWeight: 700, cursor: "pointer",
-              background: "linear-gradient(135deg, #1C1917 0%, #292524 100%)",
-              color: "#FCD34D", border: "1px solid #44403C",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
-              transition: "all 0.2s",
+              padding: "6px 14px", borderRadius: 8, marginBottom: 6,
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+              background: "#fff", color: "#1C1917", border: "1px solid #E7E5E4",
+              boxShadow: "0 1px 2px rgba(28,25,23,0.04)",
+              transition: "all 0.15s",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.04)"; e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,0.28)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.18)"; }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#F9FAFB"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
           >
-            <Moon size={13} />
             Done For Today
-            <span style={{ background: "#F59E0B", color: "#1C1917", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 800, marginLeft: 2 }}>{doingCount}</span>
+            <span style={{ background: "#F5F5F4", color: "#78716C", borderRadius: 10, padding: "2px 6px", fontSize: 10, fontWeight: 700 }}>{doingCount}</span>
           </button>
         )}
       </div>

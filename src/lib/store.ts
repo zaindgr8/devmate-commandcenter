@@ -114,18 +114,30 @@ export async function loadState(): Promise<AppState> {
   };
 }
 
-export async function saveState(state: AppState) {
+// Debounce timer — only flush to Supabase after 1.5s of inactivity
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function saveState(state: AppState) {
   if (typeof window === "undefined") return;
+
+  // Write to localStorage immediately for instant local feedback
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); // local backup
-    await fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state)
-    });
-  } catch (err) {
-    console.error("Failed to save to DB", err);
-  }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {}
+
+  // Debounce the expensive network write to Supabase
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await fetch("/api/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state),
+      });
+    } catch (err) {
+      console.error("Failed to save to DB", err);
+    }
+  }, 1500);
 }
 
 // Auth

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
-import { authenticate } from "@/lib/store";
 import { Lock, Mail, ArrowRight, AlertCircle } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 const S = {
   page: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, background: "#FAFAF9" } as React.CSSProperties,
@@ -22,8 +22,8 @@ const S = {
 };
 
 export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("zainulabideenbaloch@proton.me");
+  const [password, setPassword] = useState("Ajalpc@yo1");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -31,10 +31,29 @@ export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 500));
-    const u = authenticate(email, password);
-    if (u) onLogin(u);
-    else { setError("Invalid email or password"); setLoading(false); }
+    
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (signInError) {
+      setError(signInError.message);
+      setLoading(false);
+    } else if (data.user) {
+      const u = {
+        email: data.user.email,
+        role: "owner",
+        name: "Zain & Fatima"
+      };
+      if (typeof window !== "undefined") {
+        localStorage.setItem("devmate_auth", JSON.stringify(u));
+      }
+      onLogin(u);
+    } else {
+      setError("Invalid email or password");
+      setLoading(false);
+    }
   };
 
   return (
@@ -67,9 +86,7 @@ export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
 
           <div style={S.divider}>
             <p style={S.hint}>
-              Demo credentials:<br />
-              Owner: zain@devmate.com / devmate2024<br />
-              Manager: manager@devmate.com / manager2024
+              Secure login via Supabase.
             </p>
           </div>
         </div>

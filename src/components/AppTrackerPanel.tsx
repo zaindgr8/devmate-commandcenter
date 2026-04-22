@@ -126,12 +126,10 @@ export default function AppTrackerPanel({
   const [editingDownloadsText, setEditingDownloadsText] = useState("");
 
   const card: React.CSSProperties = {
-    background: "rgba(255, 255, 255, 0.8)",
-    backdropFilter: "blur(12px)",
+    background: "#fff",
     borderRadius: 18,
-    border: "1px solid rgba(240, 238, 236, 0.7)",
-    boxShadow: "0 4px 20px rgba(28, 25, 23, 0.03), 0 1px 2px rgba(28, 25, 23, 0.02)",
-    // removed overflow: hidden to prevent clipping dropdowns if they extend outside, though overflowX:auto handles mostly
+    border: "1px solid #F0EEEC",
+    boxShadow: "0 4px 20px rgba(28, 25, 23, 0.05), 0 1px 2px rgba(28, 25, 23, 0.03)",
     transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease",
   };
 

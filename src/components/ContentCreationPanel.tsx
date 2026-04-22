@@ -47,11 +47,10 @@ export default function ContentCreationPanel({
   }, [year, month, daysInMonth, firstDayOfWeek]);
 
   const cardStyle: React.CSSProperties = {
-    background: "rgba(255, 255, 255, 0.8)",
-    backdropFilter: "blur(12px)",
+    background: "#fff",
     borderRadius: 18,
-    border: "1px solid rgba(240, 238, 236, 0.7)",
-    boxShadow: "0 4px 20px rgba(28, 25, 23, 0.03), 0 1px 2px rgba(28, 25, 23, 0.02)",
+    border: "1px solid #F0EEEC",
+    boxShadow: "0 4px 20px rgba(28, 25, 23, 0.05), 0 1px 2px rgba(28, 25, 23, 0.03)",
     overflow: "hidden",
     padding: 20,
   };
