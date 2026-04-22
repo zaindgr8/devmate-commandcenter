@@ -1,28 +1,45 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
+import { supabase } from '@/lib/supabase';
 
-const dbPath = path.join(process.cwd(), 'database.json');
+// We store the entire state in a single row for now to maintain compatibility 
+// with the existing frontend store logic.
+const STATE_ROW_ID = 1;
 
 export async function GET() {
   try {
-    const data = await fs.readFile(dbPath, 'utf8');
-    if (data) {
-      return NextResponse.json(JSON.parse(data));
+    const { data, error } = await supabase
+      .from('app_state')
+      .select('state')
+      .eq('id', STATE_ROW_ID)
+      .single();
+
+    if (error) {
+      // If no data found, return null and the store will use defaults
+      if (error.code === 'PGRST116') return NextResponse.json(null);
+      throw error;
     }
+
+    return NextResponse.json(data.state);
   } catch (err) {
-    console.error("Failed to read from database.json", err);
+    console.error("Failed to read from Supabase", err);
+    return NextResponse.json(null);
   }
-  return NextResponse.json(null);
 }
 
 export async function POST(req: Request) {
   try {
     const data = await req.json();
-    await fs.writeFile(dbPath, JSON.stringify(data, null, 2), 'utf8');
+    
+    // Use upsert to update the single state row
+    const { error } = await supabase
+      .from('app_state')
+      .upsert({ id: STATE_ROW_ID, state: data });
+
+    if (error) throw error;
+    
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Failed to write to database.json", err);
-    return NextResponse.json({ success: false }, { status: 500 });
+    console.error("Failed to write to Supabase", err);
+    return NextResponse.json({ success: false, error: (err as Error).message }, { status: 500 });
   }
 }
