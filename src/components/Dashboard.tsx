@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+// AlertTicker: persisted in localStorage for simplicity (not in AppState)
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
   Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote
@@ -24,6 +25,147 @@ function fmtDate(d: string) {
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? "Good Morning" : h < 17 ? "Good Afternoon" : "Good Evening"; }
+
+/* ─── Alert Ticker ─── */
+function AlertTicker() {
+  const STORAGE_KEY = "devmate_alerts";
+  const [alerts, setAlerts] = useState<string[]>(() => {
+    if (typeof window === "undefined") return ["Stay focused. Ship daily. 🚀"];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : ["Stay focused. Ship daily. 🚀"];
+    } catch { return ["Stay focused. Ship daily. 🚀"]; }
+  });
+  const [showInput, setShowInput] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts));
+    }
+  }, [alerts]);
+
+  useEffect(() => {
+    if (showInput) inputRef.current?.focus();
+  }, [showInput]);
+
+  const addAlert = () => {
+    const t = draft.trim();
+    if (!t) { setShowInput(false); return; }
+    setAlerts(prev => [...prev, t]);
+    setDraft("");
+    setShowInput(false);
+  };
+
+  const removeAlert = (idx: number) =>
+    setAlerts(prev => prev.filter((_, i) => i !== idx));
+
+  // Build the scrolling text: repeat alerts so it loops
+  const tickerText = alerts.length > 0
+    ? [...alerts, ...alerts].map((a, i) => (
+        <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 8, paddingRight: 60 }}>
+          <span style={{ opacity: 0.6, fontSize: 10 }}>●</span>
+          {a}
+          <button
+            onClick={(e) => { e.stopPropagation(); removeAlert(i % alerts.length); }}
+            title="Remove alert"
+            style={{
+              background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%",
+              width: 14, height: 14, display: "inline-flex", alignItems: "center",
+              justifyContent: "center", color: "#fff", cursor: "pointer",
+              fontSize: 10, lineHeight: 1, flexShrink: 0,
+            }}
+          >×</button>
+        </span>
+      ))
+    : [<span key="empty" style={{ paddingRight: 60, opacity: 0.7 }}>No alerts — click [+] to add one</span>];
+
+  const duration = Math.max(12, alerts.length * 8);
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
+      height: 36, background: "linear-gradient(90deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%)",
+      display: "flex", alignItems: "center", overflow: "hidden",
+      boxShadow: "0 2px 12px rgba(220,38,38,0.4)",
+    }}>
+      {/* Scrolling text */}
+      <div style={{ flex: 1, overflow: "hidden", position: "relative", height: "100%", display: "flex", alignItems: "center" }}>
+        <style>{`
+          @keyframes ticker-scroll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+          }
+          .ticker-inner {
+            display: inline-flex;
+            white-space: nowrap;
+            animation: ticker-scroll ${duration}s linear infinite;
+            will-change: transform;
+          }
+          .ticker-inner:hover { animation-play-state: paused; }
+        `}</style>
+        <div className="ticker-inner" style={{
+          fontSize: 12, fontWeight: 600, color: "#fff",
+          letterSpacing: 0.3, fontFamily: "'Inter', sans-serif",
+        }}>
+          {tickerText}
+        </div>
+      </div>
+
+      {/* [+] button */}
+      {showInput ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingRight: 12, flexShrink: 0 }}>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addAlert(); if (e.key === "Escape") { setShowInput(false); setDraft(""); } }}
+            placeholder="New alert…"
+            style={{
+              fontSize: 12, padding: "3px 10px", borderRadius: 6,
+              border: "1.5px solid rgba(255,255,255,0.5)",
+              background: "rgba(255,255,255,0.15)", color: "#fff",
+              outline: "none", width: 200,
+            }}
+          />
+          <button
+            onClick={addAlert}
+            style={{
+              fontSize: 11, fontWeight: 700, padding: "3px 12px", borderRadius: 6,
+              background: "#fff", color: "#DC2626", border: "none", cursor: "pointer",
+            }}
+          >Add</button>
+          <button
+            onClick={() => { setShowInput(false); setDraft(""); }}
+            style={{
+              fontSize: 14, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
+              background: "transparent", color: "rgba(255,255,255,0.7)", border: "none", cursor: "pointer",
+            }}
+          >✕</button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowInput(true)}
+          title="Add new alert"
+          style={{
+            marginRight: 12, flexShrink: 0,
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontSize: 11, fontWeight: 700,
+            background: "rgba(255,255,255,0.2)", color: "#fff",
+            border: "1.5px solid rgba(255,255,255,0.4)",
+            borderRadius: 6, padding: "3px 10px", cursor: "pointer",
+            transition: "all 0.15s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.3)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
+        >
+          [+]
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [state, setState] = useState<AppState | null>(null);
@@ -175,7 +317,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const inp: React.CSSProperties = { fontSize: 12, padding: "5px 8px", borderRadius: 8, background: "#FAFAF9", border: "1px solid #E7E5E4", color: "#1C1917" };
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", background: "#FAFAF9" }}>
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#FAFAF9" }}>
+      {/* ─── Fixed Alert Ticker ─── */}
+      <AlertTicker />
+      <div style={{ display: "flex", flex: 1, paddingTop: 36 }}>
       {/* ─── Sidebar ─── */}
       <aside style={sidebar}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
@@ -526,38 +671,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Goals Overview</h3>
                 </div>
 
-                {/* Apps Summary Section */}
-                {state.appTrackers && state.appTrackers.length > 0 && (
-                  <div style={{ marginBottom: 24 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-                      <Smartphone size={12} color="#A8A29E" />
-                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Apps Progress</span>
-                    </div>
-                    {state.appTrackers.map(tracker => {
-                      const live = tracker.apps.filter(a => a.status === "Live").length;
-                      const total = tracker.apps.length;
-                      const dls = tracker.apps.reduce((s, a) => s + (a.downloads || 0), 0);
-                      const pct = total > 0 ? (live / total) * 100 : 0;
-                      return (
-                        <div key={tracker.id} style={{ ...card, padding: 12, marginBottom: 8, background: "linear-gradient(135deg, #fff 0%, #FAFAF9 100%)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#1C1917" }}>{tracker.title}</div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "#16A34A" }}>
-                              <Download size={10} /> {dls.toLocaleString()}
-                            </div>
-                          </div>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontWeight: 700, color: "#78716C", marginBottom: 4 }}>
-                            <span>{live} / {total} LIVE</span>
-                            <span>{Math.round(pct)}%</span>
-                          </div>
-                          <div style={{ height: 4, borderRadius: 2, background: "#F1F5F9" }}>
-                            <div style={{ height: "100%", borderRadius: 2, background: "#16A34A", width: `${pct}%`, transition: "width 0.5s" }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* Apps Progress Summary removed per user request */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {state.goals.map((goal) => {
                     const pct = Math.min(100, Math.round((goal.current / goal.target) * 100)) || 0;
@@ -611,6 +725,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           )}
         </div>
       </main>
+      </div>
     </div>
   );
 }
