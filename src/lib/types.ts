@@ -44,12 +44,21 @@ export interface ManagerNote {
   chips?: { text: string; status: Status }[];
 }
 
+export interface Meeting {
+  id: string;
+  projectId: string; // references Project.id OR custom project name
+  employeeIds: string[]; // references Employee.id OR custom employee names
+  time: string; // e.g. "14:30" or "10:30 AM"
+  status: Status; // "not_started" | "doing" | "done"
+}
+
 export interface DayData {
   date: string;
   mainTasks: MainTask[];
   subTasks: SubTask[];
   rating: number; // 0-5
   managerNotes: ManagerNote[];
+  meetings?: Meeting[];
 }
 
 export type AppStatus = "In Development" | "In Review" | "Live" | "Paused" | "Idea";
@@ -74,6 +83,17 @@ export interface ProjectResource {
   category: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface Employee {
+  id: string;
+  name: string;
+}
+
 export interface AppState {
   currentDate: string;
   days: Record<string, DayData>;
@@ -83,6 +103,8 @@ export interface AppState {
   appTrackers?: AppTracker[];
   projectResources?: ProjectResource[];
   contentPostedDates?: string[]; // Array of date strings like "2026-04-21"
+  projects?: Project[];
+  employees?: Employee[];
 }
 
 export type UserRole = "owner" | "manager";

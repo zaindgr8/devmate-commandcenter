@@ -19,6 +19,7 @@ export function createDayData(date: string): DayData {
     subTasks: [],
     rating: 0,
     managerNotes: [],
+    meetings: [],
   };
 }
 
@@ -62,6 +63,12 @@ export async function loadState(): Promise<AppState> {
       if (!parsed.contentPostedDates) {
         parsed.contentPostedDates = [];
       }
+      if (!parsed.projects) {
+        parsed.projects = [];
+      }
+      if (!parsed.employees) {
+        parsed.employees = [];
+      }
       return parsed;
     }
   } catch(err) {
@@ -96,6 +103,12 @@ export async function loadState(): Promise<AppState> {
        if (!parsed.contentPostedDates) {
          parsed.contentPostedDates = [];
        }
+       if (!parsed.projects) {
+         parsed.projects = [];
+       }
+       if (!parsed.employees) {
+         parsed.employees = [];
+       }
        saveState(parsed);
        return parsed;
      }
@@ -111,6 +124,8 @@ export async function loadState(): Promise<AppState> {
     appTrackers: [],
     projectResources: [],
     contentPostedDates: [],
+    projects: [],
+    employees: [],
   };
 }
 

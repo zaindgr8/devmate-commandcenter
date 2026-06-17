@@ -27,7 +27,7 @@ function format12(h: number) {
   return `${disp} ${ampm}`;
 }
 
-export default function TimelineView({ tasks }: { tasks: MainTask[] }) {
+export default function TimelineView({ tasks, onTaskClick }: { tasks: MainTask[], onTaskClick?: (id: string) => void }) {
   const hrs: number[] = [];
   for (let h = 7; h <= 31; h += 2) hrs.push(h);
 
@@ -106,19 +106,28 @@ export default function TimelineView({ tasks }: { tasks: MainTask[] }) {
           if (left < 0) { width += left; left = 0; }
           if (left + width > 100) width = 100 - left;
 
+          const isSleep = t.name.toLowerCase() === "sleep";
+
           return (
             <div key={t.id} style={{ position: "relative", height: 24, marginBottom: 3 }}>
               {width > 0 && (
                 <div
+                  onClick={() => {
+                    if (!isSleep && onTaskClick) {
+                      onTaskClick(t.id);
+                    }
+                  }}
                   style={{
                     position: "absolute", left: `${left}%`, width: `${width}%`, top: 0, height: 22,
-                    borderRadius: 6, background: t.name.toLowerCase() === "sleep" ? BAR_BG["not_started"] : BAR_BG[t.status], display: "flex", alignItems: "center",
+                    borderRadius: 6, background: isSleep ? BAR_BG["not_started"] : BAR_BG[t.status], display: "flex", alignItems: "center",
                     paddingLeft: 8, paddingRight: 8, overflow: "hidden", transition: "all 0.3s",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+                    cursor: isSleep ? "default" : "pointer",
+                    userSelect: "none"
                   }}
-                  title={`${t.name}: ${t.from} – ${t.to}`}
+                  title={`${t.name}: ${t.from} – ${t.to}${isSleep ? "" : " (Click to cycle status)"}`}
                 >
-                  <span style={{ fontSize: 10, fontWeight: 600, color: t.name.toLowerCase() === "sleep" ? BAR_FG["not_started"] : BAR_FG[t.status], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: "100%" }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: isSleep ? BAR_FG["not_started"] : BAR_FG[t.status], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", width: "100%" }}>
                     {t.name}
                   </span>
                 </div>
