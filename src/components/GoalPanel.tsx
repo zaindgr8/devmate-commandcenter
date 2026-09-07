@@ -36,7 +36,10 @@ export default function GoalPanel({ state, onSave }: { state: AppState; onSave: 
     setEditState(null);
   };
 
-  const del = (id: string) => onSave({ ...state, goals: state.goals.filter((g) => g.id !== id) });
+  const del = (id: string, title: string) => {
+    if (!window.confirm(`Delete the goal "${title}"? This can't be undone.`)) return;
+    onSave({ ...state, goals: state.goals.filter((g) => g.id !== id) });
+  };
 
   const linkedCount = (gid: string) => {
     let c = 0;
@@ -110,7 +113,7 @@ export default function GoalPanel({ state, onSave }: { state: AppState; onSave: 
             return (
               <div key={g.id} style={{ ...card, position: "relative" }}>
                 {/* Delete */}
-                <button onClick={() => del(g.id)} style={{ position: "absolute", top: 12, right: 12, padding: 4, borderRadius: 6, opacity: 0.4, transition: "opacity 0.15s" }}
+                <button onClick={() => del(g.id, g.title)} style={{ position: "absolute", top: 12, right: 12, padding: 4, borderRadius: 6, opacity: 0.4, transition: "opacity 0.15s" }}
                   onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")} onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.4")}>
                   <Trash2 size={13} color="#EF4444" />
                 </button>

@@ -45,6 +45,8 @@ export default function EmployeesPanel({
   };
 
   const deleteEmployee = (id: string) => {
+    const emp = employees.find((e) => e.id === id);
+    if (!window.confirm(`Delete "${emp?.name || "this employee"}"? Tasks and meetings that already reference them will keep the old name.`)) return;
     onSave({ ...state, employees: employees.filter((e) => e.id !== id) });
   };
 

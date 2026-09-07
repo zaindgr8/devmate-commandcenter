@@ -1,4 +1,5 @@
 import { AppState, MainTask, DayData } from "./types";
+import { supabase } from "./supabase";
 
 const STORAGE_KEY = "devmate_command_center";
 
@@ -45,12 +46,10 @@ export async function loadState(): Promise<AppState> {
         parsed.days[td] = createDayData(td);
       }
       parsed.currentDate = td;
-      const storedGoalMap: Record<string, number> = {};
-      (parsed.goals || []).forEach((g: any) => { storedGoalMap[g.id] = g.current ?? 0; });
-      parsed.goals = DEFAULT_GOALS.map(def => ({
-        ...def,
-        current: storedGoalMap[def.id] !== undefined ? storedGoalMap[def.id] : def.current,
-      }));
+      // Only seed defaults if no goals have been saved yet; otherwise preserve all user edits
+      if (!parsed.goals || parsed.goals.length === 0) {
+        parsed.goals = [...DEFAULT_GOALS];
+      }
       if (!parsed.categoryLabels) {
         parsed.categoryLabels = { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" };
       }
@@ -85,12 +84,10 @@ export async function loadState(): Promise<AppState> {
          parsed.days[td] = createDayData(td);
        }
        parsed.currentDate = td;
-       const storedGoalMap: Record<string, number> = {};
-       (parsed.goals || []).forEach((g: any) => { storedGoalMap[g.id] = g.current ?? 0; });
-       parsed.goals = DEFAULT_GOALS.map(def => ({
-         ...def,
-         current: storedGoalMap[def.id] !== undefined ? storedGoalMap[def.id] : def.current,
-       }));
+       // Only seed defaults if no goals have been saved yet; otherwise preserve all user edits
+       if (!parsed.goals || parsed.goals.length === 0) {
+         parsed.goals = [...DEFAULT_GOALS];
+       }
        if (!parsed.categoryLabels) {
          parsed.categoryLabels = { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" };
        }
@@ -157,20 +154,6 @@ export function saveState(state: AppState) {
 
 // Auth
 const AUTH_KEY = "devmate_auth";
-const USERS = [
-  { email: "devmate@goal.com", password: "Wegrowtogether@yo1", role: "owner" as const, name: "Zain & Fatima" },
-];
-
-export function authenticate(email: string, password: string) {
-  const user = USERS.find((u) => u.email === email && u.password === password);
-  if (user) {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(AUTH_KEY, JSON.stringify({ email: user.email, role: user.role, name: user.name }));
-    }
-    return { email: user.email, role: user.role, name: user.name };
-  }
-  return null;
-}
 
 export function getSession() {
   if (typeof window === "undefined") return null;
@@ -181,9 +164,14 @@ export function getSession() {
   return null;
 }
 
-export function logout() {
+export async function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem(AUTH_KEY);
+  }
+  if (supabase) {
+    try {
+      await supabase.auth.signOut();
+    } catch {}
   }
 }
 

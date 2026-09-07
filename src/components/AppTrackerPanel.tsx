@@ -91,7 +91,11 @@ export default function AppTrackerPanel({
     ]);
   };
 
-  const delTracker = (tid: string) => saveTrackers(trackers.filter((t) => t.id !== tid));
+  const delTracker = (tid: string) => {
+    const t = trackers.find((tr) => tr.id === tid);
+    if (!window.confirm(`Delete the board "${t?.title || "this board"}" and all ${t?.apps.length ?? 0} app(s) in it? This can't be undone.`)) return;
+    saveTrackers(trackers.filter((t) => t.id !== tid));
+  };
 
   const updateTracker = (tid: string, fn: (t: AppTracker) => AppTracker) =>
     saveTrackers(trackers.map((t) => (t.id === tid ? fn(t) : t)));
@@ -106,8 +110,12 @@ export default function AppTrackerPanel({
       ],
     }));
 
-  const delApp = (tid: string, aid: string) =>
+  const delApp = (tid: string, aid: string) => {
+    const t = trackers.find((tr) => tr.id === tid);
+    const a = t?.apps.find((app) => app.id === aid);
+    if (!window.confirm(`Remove "${a?.name || "this app"}" from the tracker?`)) return;
     updateTracker(tid, (t) => ({ ...t, apps: t.apps.filter((a) => a.id !== aid) }));
+  };
 
   const updateApp = (tid: string, aid: string, patch: Partial<AppEntry>) =>
     updateTracker(tid, (t) => ({

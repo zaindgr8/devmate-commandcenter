@@ -22,8 +22,8 @@ const S = {
 };
 
 export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
-  const [email, setEmail] = useState("zainulabideenbaloch@proton.me");
-  const [password, setPassword] = useState("Ajalpc@yo1");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +31,13 @@ export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    
+
+    if (!supabase) {
+      setError("Supabase isn't configured — check your environment variables.");
+      setLoading(false);
+      return;
+    }
+
     const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -44,7 +50,7 @@ export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
       const u = {
         email: data.user.email,
         role: "owner",
-        name: "Zain & Fatima"
+        name: "Zain"
       };
       if (typeof window !== "undefined") {
         localStorage.setItem("devmate_auth", JSON.stringify(u));

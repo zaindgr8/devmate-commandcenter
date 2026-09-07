@@ -39,6 +39,8 @@ export default function ProjectsPanel({
   };
 
   const deleteProject = (id: string) => {
+    const p = projects.find((pr) => pr.id === id);
+    if (!window.confirm(`Delete the project "${p?.name || "this project"}"? Tasks and meetings that already reference it will keep the old name.`)) return;
     onSave({ ...state, projects: projects.filter((p) => p.id !== id) });
   };
 

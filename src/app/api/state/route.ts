@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase';
 const STATE_ROW_ID = 1;
 
 export async function GET() {
+  if (!supabase) return NextResponse.json(null);
+
   try {
     const { data, error } = await supabase
       .from('app_state')
@@ -27,6 +29,10 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  if (!supabase) {
+    return NextResponse.json({ success: false, error: "Supabase not configured" }, { status: 500 });
+  }
+
   try {
     const data = await req.json();
     

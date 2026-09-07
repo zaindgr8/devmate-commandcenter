@@ -332,6 +332,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   };
 
   const deleteMeeting = (id: string) => {
+    if (!window.confirm("Delete this meeting?")) return;
     setDay((d) => ({
       ...d,
       meetings: (d.meetings || []).filter((meet) => meet.id !== id),
@@ -359,19 +360,29 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   };
   const setMainName = (id: string, name: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, name } : t) }));
   const setTime = (id: string, f: "from" | "to", v: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, [f]: v } : t) }));
-  const delMain = (id: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }));
+  const delMain = (id: string) => {
+    const t = day.mainTasks.find((t) => t.id === id);
+    if (!window.confirm(`Delete "${t?.name || "this task"}"?`)) return;
+    setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }));
+  };
   const addMain = (category: "Mandatory" | "Company" | "Misc") => setDay((d) => ({ ...d, mainTasks: [...d.mainTasks, { id: "t_" + Date.now(), category, name: "New Task", status: "not_started", from: "12:00", to: "13:00", goalLink: "" }] }));
   const setCategoryLabel = (cat: string, label: string) => save({ ...state, categoryLabels: { ...(state.categoryLabels || {}), [cat]: label } });
 
-  const delSub = (id: string) => setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }));
+  const delSub = (id: string) => {
+    if (!window.confirm("Delete this task?")) return;
+    setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }));
+  };
   const rate = (r: number) => setDay((d) => ({ ...d, rating: r }));
-  const delNote = (id: string) => setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }));
+  const delNote = (id: string) => {
+    if (!window.confirm("Delete this note?")) return;
+    setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }));
+  };
 
   const actionableMainTasks = day.mainTasks.filter(t => t.name.toLowerCase() !== "sleep");
   const doneM = actionableMainTasks.filter((t) => t.status === "done").length;
   const totalM = actionableMainTasks.length;
-  const doneS = day.subTasks.filter(i => i.status === "done").length;
-  const totalS = day.subTasks.length;
+  const doneS = day.subTasks.filter(i => !i.isSection && i.status === "done").length;
+  const totalS = day.subTasks.filter(i => !i.isSection).length;
 
   const doneF = day.managerNotes.filter(n => n.status === "done").length;
   const totalF = day.managerNotes.length;
@@ -466,8 +477,9 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
             <div style={{ flex: 1, maxWidth: 880, padding: "28px 32px" }}>
 
               {/* ═══ TASKS TAB ═══ */}
-              {tab === "tasks" && (
-                <div>
+              {/* Kept mounted (hidden via display:none) instead of unmounted so in-progress
+                  task drafts in DailyTodos survive switching to another sidebar tab. */}
+              <div style={{ display: tab === "tasks" ? "block" : "none" }}>
                   {/* Header */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
                     <div>
@@ -705,6 +717,18 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         subTasks: [...d.subTasks, { id: String(Date.now()), parentId: "", text: txt, status: "not_started" as Status, employee, chips }]
                       }));
                     }}
+                    onAddSection={(name) => {
+                      setDay((d) => ({
+                        ...d,
+                        subTasks: [...d.subTasks, { id: "sec_" + Date.now(), parentId: "", text: name, status: "not_started" as Status, isSection: true }]
+                      }));
+                    }}
+                    onEditSection={(id, name) => {
+                      setDay((d) => ({
+                        ...d,
+                        subTasks: d.subTasks.map((s) => s.id === id ? { ...s, text: name } : s)
+                      }));
+                    }}
                     onCycleSub={(id) => setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => s.id === id ? { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] } : s) }))}
                     onCycleSubChip={(id, chipIdx) => setDay((d) => ({
                       ...d, subTasks: d.subTasks.map((s) => {
@@ -829,7 +853,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
 
                 </div>
-              )}
 
               {/* ═══ GOALS TAB ═══ */}
               {tab === "goals" && <GoalPanel state={state} onSave={save} />}
@@ -851,8 +874,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
             </div>
 
             {/* ═══ RIGHT SIDEBAR (Goals & Meetings) ═══ */}
-            {tab === "tasks" && (
-              <div style={{ width: 320, flexShrink: 0, padding: "28px 32px 28px 0" }}>
+            <div style={{ width: 320, flexShrink: 0, padding: "28px 32px 28px 0", display: tab === "tasks" ? "block" : "none" }}>
                 <div style={{ position: "sticky", top: 28, display: "flex", flexDirection: "column", gap: 32 }}>
 
                   {/* Daily Meetings Section */}
@@ -932,8 +954,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   )}
 
                 </div>
-              </div>
-            )}
+            </div>
           </div>
         </main>
       </div>
@@ -1616,6 +1637,8 @@ function DailyTodos({
   card,
   onDoneForToday,
   onAddSub,
+  onAddSection,
+  onEditSection,
   onCycleSub,
   onCycleSubChip,
   onDelSub,
@@ -1640,6 +1663,8 @@ function DailyTodos({
   card: React.CSSProperties;
   onDoneForToday: () => void;
   onAddSub: (text: string, chips?: { text: string; status: Status }[], employee?: string) => void;
+  onAddSection: (name: string) => void;
+  onEditSection: (id: string, name: string) => void;
   onCycleSub: (id: string) => void;
   onCycleSubChip: (id: string, chipIdx: number) => void;
   onDelSub: (id: string) => void;
@@ -1664,6 +1689,11 @@ function DailyTodos({
   const [pendingChips, setPendingChips] = useState<string[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  // Section heading state
+  const [addingSection, setAddingSection] = useState(false);
+  const [sectionInput, setSectionInput] = useState("");
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  const [editingSectionText, setEditingSectionText] = useState("");
 
   // ── Project picker dropdown ──
   const [showProjectDrop, setShowProjectDrop] = useState(false);
@@ -1806,14 +1836,65 @@ function DailyTodos({
     setNewChipText("");
   };
 
-  const doingCount = subTasks.filter(s => s.status === "doing").length + managerNotes.filter(n => n.status === "doing").length;
+  const doingCount = subTasks.filter(s => !s.isSection && s.status === "doing").length + managerNotes.filter(n => n.status === "doing").length;
+
+  const commitSection = () => {
+    const name = sectionInput.trim();
+    if (name) onAddSection(name);
+    setSectionInput("");
+    setAddingSection(false);
+  };
+
+  const commitSectionEdit = () => {
+    if (editingSectionId && editingSectionText.trim()) {
+      onEditSection(editingSectionId, editingSectionText.trim());
+    }
+    setEditingSectionId(null);
+    setEditingSectionText("");
+  };
 
   return (
     <div style={{ marginTop: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, borderBottom: "1px solid #F0EEEC", paddingBottom: 0 }}>
-        <div style={{ display: "flex", gap: 16 }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
           <button onClick={() => setTodoTab("daily")} style={tabStyle(todoTab === "daily")}>Zain&apos;s Todos</button>
-          <button onClick={() => setTodoTab("manager")} style={tabStyle(todoTab === "manager")}>Fatima&apos;s Todos</button>
+          <button onClick={() => setTodoTab("manager")} style={tabStyle(todoTab === "manager")}>Manager&apos;s Todos</button>
+          {/* Add Section button — only show on Zain's tab */}
+          {todoTab === "daily" && (
+            addingSection ? (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <input
+                  autoFocus
+                  value={sectionInput}
+                  onChange={(e) => setSectionInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") commitSection(); if (e.key === "Escape") { setAddingSection(false); setSectionInput(""); } }}
+                  onBlur={commitSection}
+                  placeholder="Section name…"
+                  style={{
+                    fontSize: 11, fontWeight: 700, padding: "3px 10px",
+                    borderRadius: 8, border: "1.5px solid #2563EB",
+                    background: "#EFF6FF", color: "#2563EB", outline: "none", width: 140,
+                  }}
+                />
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingSection(true)}
+                title="Add a section heading to group tasks"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  fontSize: 10, fontWeight: 700, color: "#A8A29E",
+                  background: "none", border: "1px dashed #D1D5DB",
+                  borderRadius: 8, padding: "2px 8px", cursor: "pointer",
+                  letterSpacing: 0.5, marginBottom: 6, transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563EB"; e.currentTarget.style.color = "#2563EB"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#D1D5DB"; e.currentTarget.style.color = "#A8A29E"; }}
+              >
+                <Plus size={10} /> SECTION
+              </button>
+            )
+          )}
         </div>
         {doingCount > 0 && (
           <button
@@ -2023,12 +2104,85 @@ function DailyTodos({
       {currentList.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {currentList.map((item, index) => {
+            const isSection = !!(item as any).isSection;
             const chips = (item as any).chips as { text: string; status: Status }[] | undefined;
             const employee = (item as any).employee as string | undefined;
             const overallStatus: Status = (item as any).status || "not_started";
             const isChipTask = chips && chips.length > 0;
             const isDragging = dragIdx === index;
             const isOver = dragOver === index;
+
+            // ── Section heading row ──
+            if (isSection) {
+              return (
+                <div
+                  key={item.id}
+                  draggable
+                  onDragStart={() => setDragIdx(index)}
+                  onDragEnd={() => { setDragIdx(null); setDragOver(null); }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(index); }}
+                  onDrop={() => {
+                    if (dragIdx !== null && dragIdx !== index) {
+                      todoTab === "daily" ? onReorderSubs(dragIdx, index) : onReorderNotes(dragIdx, index);
+                    }
+                    setDragIdx(null); setDragOver(null);
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    marginTop: index > 0 ? 6 : 0, marginBottom: 2,
+                    cursor: "grab",
+                    opacity: isDragging ? 0.4 : 1,
+                    transform: isOver && !isDragging ? "scale(1.01)" : "scale(1)",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {/* drag handle */}
+                  <span style={{ color: "#D1D5DB", fontSize: 14, lineHeight: 1, userSelect: "none", flexShrink: 0 }}>⠿</span>
+                  <div style={{ flex: 1, height: 1, background: isOver && !isDragging ? "#2563EB" : "#E7E5E4", transition: "background 0.15s" }} />
+                  {editingSectionId === item.id ? (
+                    <input
+                      autoFocus
+                      value={editingSectionText}
+                      onChange={(e) => setEditingSectionText(e.target.value)}
+                      onBlur={commitSectionEdit}
+                      onKeyDown={(e) => { if (e.key === "Enter") commitSectionEdit(); if (e.key === "Escape") { setEditingSectionId(null); } }}
+                      style={{
+                        fontSize: 11, fontWeight: 800, letterSpacing: 1,
+                        textTransform: "uppercase", color: "#44403C",
+                        background: "#F5F5F4", border: "1.5px solid #2563EB",
+                        borderRadius: 6, padding: "2px 8px", outline: "none", width: 140,
+                      }}
+                    />
+                  ) : (
+                    <button
+                      onDoubleClick={() => { setEditingSectionId(item.id); setEditingSectionText((item as any).text || ""); }}
+                      title="Double-click to rename · drag to reorder"
+                      style={{
+                        fontSize: 11, fontWeight: 800, letterSpacing: 1,
+                        textTransform: "uppercase", color: "#78716C",
+                        background: "none", border: "none", padding: "0 4px",
+                        cursor: "grab", whiteSpace: "nowrap",
+                      }}
+                    >
+                      {(item as any).text || "Section"}
+                    </button>
+                  )}
+                  <div style={{ flex: 1, height: 1, background: isOver && !isDragging ? "#2563EB" : "#E7E5E4", transition: "background 0.15s" }} />
+                  <button
+                    onClick={() => onDelSub(item.id)}
+                    title="Delete section"
+                    style={{ padding: 3, opacity: 0.35, transition: "opacity 0.15s", color: "#EF4444", background: "none", border: "none", cursor: "pointer", display: "flex" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.35")}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              );
+            }
+
+            // Check if this task is inside a section (i.e. a section heading exists before it)
+            const hasSectionAbove = currentList.slice(0, index).some((r) => !!(r as any).isSection);
 
             return (
               <div
@@ -2047,6 +2201,7 @@ function DailyTodos({
                   ...card,
                   padding: "12px 16px 10px",
                   position: "relative",
+                  marginLeft: hasSectionAbove ? 12 : 0,
                   borderLeft: `3px solid ${overallStatus === "done" ? "#16A34A" : overallStatus === "doing" ? "#F59E0B" : "#E7E5E4"}`,
                   transition: "all 0.2s",
                   opacity: isDragging ? 0.4 : 1,

@@ -23,6 +23,7 @@ export interface SubTask {
   status: Status;
   employee?: string;
   chips?: { text: string; status: Status }[];
+  isSection?: boolean; // when true, renders as a named category heading, not a task
 }
 
 export interface Goal {
