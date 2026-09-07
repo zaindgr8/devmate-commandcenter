@@ -128,27 +128,50 @@ export async function loadState(): Promise<AppState> {
 
 // Debounce timer — only flush to Supabase after 1.5s of inactivity
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingState: AppState | null = null;
+
+async function sendToDb(state: AppState, keepalive = false) {
+  try {
+    await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+      keepalive,
+    });
+    _pendingState = null;
+  } catch (err) {
+    console.error("Failed to save to DB", err);
+  }
+}
+
+if (typeof window !== "undefined") {
+  // Ensure any pending edits are pushed to DB even if user immediately leaves or refreshes
+  window.addEventListener("beforeunload", () => {
+    if (_pendingState) {
+      sendToDb(_pendingState, true);
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && _pendingState) {
+      sendToDb(_pendingState, true);
+    }
+  });
+}
 
 export function saveState(state: AppState) {
   if (typeof window === "undefined") return;
+
+  _pendingState = state;
 
   // Write to localStorage immediately for instant local feedback
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {}
 
-  // Debounce the expensive network write to Supabase
+  // Debounce the network write to Supabase
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(async () => {
-    try {
-      await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state),
-      });
-    } catch (err) {
-      console.error("Failed to save to DB", err);
-    }
+  _saveTimer = setTimeout(() => {
+    sendToDb(state);
   }, 1500);
 }
 
