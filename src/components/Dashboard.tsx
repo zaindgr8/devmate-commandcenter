@@ -241,85 +241,255 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     nextDate.setDate(nextDate.getDate() + 1);
     const nextKey = nextDate.toISOString().slice(0, 10);
 
-    // Only rows whose overall status is "doing"
-    const doingSubTasks = td.subTasks.filter((s) => s.status === "doing");
-    const remainingSubTasks = td.subTasks.filter((s) => s.status !== "doing");
-    const doingNotes = td.managerNotes.filter((n) => n.status === "doing");
-    const remainingNotes = td.managerNotes.filter((n) => n.status !== "doing");
+    const prefix = "carried_" + Date.now() + "_";
+
+    // 1. Group today's subTasks by section header (or null for top-level tasks)
+    interface SectionBlock {
+      section: SubTask | null;
+      tasks: SubTask[];
+    }
+
+    const blocks: SectionBlock[] = [];
+    let currentBlock: SectionBlock = { section: null, tasks: [] };
+
+    for (const item of td.subTasks) {
+      if (item.isSection) {
+        if (currentBlock.section !== null || currentBlock.tasks.length > 0) {
+          blocks.push(currentBlock);
+        }
+        currentBlock = { section: item, tasks: [] };
+      } else {
+        currentBlock.tasks.push(item);
+      }
+    }
+    if (currentBlock.section !== null || currentBlock.tasks.length > 0) {
+      blocks.push(currentBlock);
+    }
+
+    // 2. Process each block: split tasks into carried vs remaining for today
+    const carriedBlocks: { section: SubTask | null; tasks: SubTask[] }[] = [];
+    const newTodaySubTasks: SubTask[] = [];
+
+    for (const block of blocks) {
+      const carriedTasksInBlock: SubTask[] = [];
+      const remainingTasksInBlock: SubTask[] = [];
+
+      for (const t of block.tasks) {
+        if (t.chips && t.chips.length > 0) {
+          const doingChips = t.chips.filter((c) => c.status === "doing");
+          const nonDoingChips = t.chips.filter((c) => c.status !== "doing");
+
+          if (doingChips.length > 0) {
+            const resetChips = doingChips.map((c) => ({ ...c, status: "not_started" as Status }));
+            const newText = resetChips.map((c) => c.text).join(", ");
+            carriedTasksInBlock.push({
+              ...t,
+              id: prefix + t.id,
+              status: "not_started" as Status,
+              chips: resetChips,
+              text: newText,
+            });
+          }
+
+          if (nonDoingChips.length > 0) {
+            const allDone = nonDoingChips.every((c) => c.status === "done");
+            const anyDoing = nonDoingChips.some((c) => c.status === "doing" || c.status === "done");
+            const status: Status = allDone ? "done" : anyDoing ? "doing" : "not_started";
+            const text = nonDoingChips.map((c) => c.text).join(", ");
+            remainingTasksInBlock.push({
+              ...t,
+              chips: nonDoingChips,
+              status,
+              text,
+            });
+          }
+        } else {
+          // Plain task without chips
+          if (t.status === "doing") {
+            carriedTasksInBlock.push({
+              ...t,
+              id: prefix + t.id,
+              status: "not_started" as Status,
+            });
+          } else {
+            remainingTasksInBlock.push(t);
+          }
+        }
+      }
+
+      // Today's list: keep section if it has remaining tasks
+      if (remainingTasksInBlock.length > 0) {
+        if (block.section) newTodaySubTasks.push(block.section);
+        newTodaySubTasks.push(...remainingTasksInBlock);
+      }
+
+      // Tomorrow's list: include section tag with its carried subtasks
+      // If the section exists, it goes to tomorrow; any carried subtasks go under it
+      if (block.section || carriedTasksInBlock.length > 0) {
+        carriedBlocks.push({
+          section: block.section,
+          tasks: carriedTasksInBlock,
+        });
+      }
+    }
+
+    // 3. Process managerNotes
+    const carriedNotes: ManagerNote[] = [];
+    const newTodayNotes: ManagerNote[] = [];
+
+    for (const note of td.managerNotes) {
+      if (note.chips && note.chips.length > 0) {
+        const doingChips = note.chips.filter((c) => c.status === "doing");
+        const nonDoingChips = note.chips.filter((c) => c.status !== "doing");
+
+        if (doingChips.length > 0) {
+          const resetChips = doingChips.map((c) => ({ ...c, status: "not_started" as Status }));
+          const newText = resetChips.map((c) => c.text).join(", ");
+          carriedNotes.push({
+            ...note,
+            id: prefix + note.id,
+            date: nextKey,
+            status: "not_started" as Status,
+            chips: resetChips,
+            content: newText,
+          });
+        }
+
+        if (nonDoingChips.length > 0) {
+          const allDone = nonDoingChips.every((c) => c.status === "done");
+          const anyDoing = nonDoingChips.some((c) => c.status === "doing" || c.status === "done");
+          const status: Status = allDone ? "done" : anyDoing ? "doing" : "not_started";
+          const newText = nonDoingChips.map((c) => c.text).join(", ");
+          newTodayNotes.push({
+            ...note,
+            chips: nonDoingChips,
+            status,
+            content: newText,
+          });
+        }
+      } else {
+        if (note.status === "doing") {
+          carriedNotes.push({
+            ...note,
+            id: prefix + note.id,
+            date: nextKey,
+            status: "not_started" as Status,
+          });
+        } else {
+          newTodayNotes.push(note);
+        }
+      }
+    }
+
+    // 4. Process meetings
     const carryMeetings = (td.meetings || []).filter((m) => m.status === "not_started" || m.status === "doing");
     const remainingMeetings = (td.meetings || []).filter((m) => m.status === "done");
 
-    if (doingSubTasks.length === 0 && doingNotes.length === 0 && carryMeetings.length === 0) {
+    const carriedMeetings = carryMeetings.map((m) => ({
+      ...m,
+      id: prefix + m.id,
+      status: "not_started" as Status,
+    }));
+
+    // Check if there is anything to carry forward
+    const totalCarriedTasks = carriedBlocks.reduce((acc, b) => acc + b.tasks.length, 0);
+    if (totalCarriedTasks === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0) {
       alert("No tasks in 'Doing' status or meetings in 'Not Started'/'Doing' status to carry forward.");
       return;
     }
 
+    // 5. Merge into next day's subTasks preserving sections and grouping
     const existingNext = state.days[nextKey] || createDayData(nextKey);
-    const prefix = "carried_" + Date.now() + "_";
+    const existingNextSubs = existingNext.subTasks || [];
 
-    // For chip rows: only carry chips that are themselves "doing" (yellow).
-    // For plain rows: carry the whole row reset to not_started.
-    // Returns null if nothing to carry from this row.
-    const buildCarried = (
-      item: any,
-      extra: Record<string, unknown> = {}
-    ): any | null => {
-      if (item.chips && item.chips.length > 0) {
-        const doingChips = item.chips.filter(
-          (c: { text: string; status: Status }) => c.status === "doing"
-        );
-        if (doingChips.length === 0) return null;
-        const resetChips = doingChips.map(
-          (c: { text: string; status: Status }) => ({ ...c, status: "not_started" as Status })
-        );
-        const newText = resetChips.map((c: { text: string }) => c.text).join(", ");
-        return {
-          ...item,
-          ...extra,
-          id: prefix + item.id,
-          status: "not_started" as Status,
-          chips: resetChips,
-          text: newText,
-          content: newText,
-        };
+    let newNextSubTasks: SubTask[] = [];
+
+    if (existingNextSubs.length === 0) {
+      for (const cb of carriedBlocks) {
+        if (cb.section) {
+          newNextSubTasks.push({
+            ...cb.section,
+            id: prefix + cb.section.id,
+            status: "not_started" as Status,
+          });
+        }
+        newNextSubTasks.push(...cb.tasks);
       }
-      // Plain task — carry whole row
-      return {
-        ...item,
-        ...extra,
-        id: prefix + item.id,
-        status: "not_started" as Status,
-      };
-    };
+    } else {
+      // Group existing items in next day
+      const nextBlocks: { section: SubTask | null; tasks: SubTask[] }[] = [];
+      let cur: { section: SubTask | null; tasks: SubTask[] } = { section: null, tasks: [] };
+      for (const item of existingNextSubs) {
+        if (item.isSection) {
+          if (cur.section !== null || cur.tasks.length > 0) {
+            nextBlocks.push(cur);
+          }
+          cur = { section: item, tasks: [] };
+        } else {
+          cur.tasks.push(item);
+        }
+      }
+      if (cur.section !== null || cur.tasks.length > 0) {
+        nextBlocks.push(cur);
+      }
 
-    const carriedSubs = doingSubTasks
-      .map((s) => buildCarried(s))
-      .filter(Boolean);
+      // Merge carriedBlocks into nextBlocks
+      for (const cb of carriedBlocks) {
+        if (!cb.section) {
+          if (cb.tasks.length > 0) {
+            let topBlock = nextBlocks.find((b) => b.section === null);
+            if (!topBlock) {
+              topBlock = { section: null, tasks: [] };
+              nextBlocks.unshift(topBlock);
+            }
+            topBlock.tasks = [...cb.tasks, ...topBlock.tasks];
+          }
+          continue;
+        }
 
-    const carriedNotes = doingNotes
-      .map((n) => buildCarried(n, { date: nextKey }))
-      .filter(Boolean);
+        const secName = cb.section.text.trim().toLowerCase();
+        const existingBlock = nextBlocks.find(
+          (b) => b.section && b.section.text.trim().toLowerCase() === secName
+        );
 
-    const carriedMeetings = carryMeetings.map((m) => ({
-      ...m,
-      id: "carried_" + Date.now() + "_" + m.id,
-      status: "not_started" as Status,
-    }));
+        if (existingBlock) {
+          existingBlock.tasks = [...cb.tasks, ...existingBlock.tasks];
+        } else {
+          nextBlocks.push({
+            section: {
+              ...cb.section,
+              id: prefix + cb.section.id,
+              status: "not_started" as Status,
+            },
+            tasks: cb.tasks,
+          });
+        }
+      }
 
-    if (carriedSubs.length === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0) {
-      alert("No individual 'Doing' chips or uncompleted meetings found to carry forward.");
-      return;
+      for (const b of nextBlocks) {
+        if (b.section) newNextSubTasks.push(b.section);
+        newNextSubTasks.push(...b.tasks);
+      }
     }
 
-    const updatedToday = { ...td, subTasks: remainingSubTasks, managerNotes: remainingNotes, meetings: remainingMeetings };
+    const updatedToday = {
+      ...td,
+      subTasks: newTodaySubTasks,
+      managerNotes: newTodayNotes,
+      meetings: remainingMeetings,
+    };
     const updatedNext = {
       ...existingNext,
-      subTasks: [...carriedSubs, ...existingNext.subTasks],
-      managerNotes: [...carriedNotes, ...existingNext.managerNotes],
+      subTasks: newNextSubTasks,
+      managerNotes: [...carriedNotes, ...(existingNext.managerNotes || [])],
       meetings: [...carriedMeetings, ...(existingNext.meetings || [])],
     };
 
-    save({ ...state, days: { ...state.days, [todayKey]: updatedToday, [nextKey]: updatedNext }, currentDate: nextKey });
+    save({
+      ...state,
+      days: { ...state.days, [todayKey]: updatedToday, [nextKey]: updatedNext },
+      currentDate: nextKey,
+    });
   };
   // setDay: used for text edits, chip adds, etc. — no streak recalc
   const setDay = (fn: (d: typeof day) => typeof day) => save({ ...state, days: { ...state.days, [state.currentDate]: fn({ ...day }) } });
