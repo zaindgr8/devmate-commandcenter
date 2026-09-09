@@ -276,11 +276,12 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
       for (const t of block.tasks) {
         if (t.chips && t.chips.length > 0) {
-          const doingChips = t.chips.filter((c) => c.status === "doing");
-          const nonDoingChips = t.chips.filter((c) => c.status !== "doing");
+          // Chips that are NOT done carry forward (not_started + doing → reset to not_started)
+          const incompleteChips = t.chips.filter((c) => c.status !== "done");
+          const doneChips = t.chips.filter((c) => c.status === "done");
 
-          if (doingChips.length > 0) {
-            const resetChips = doingChips.map((c) => ({ ...c, status: "not_started" as Status }));
+          if (incompleteChips.length > 0) {
+            const resetChips = incompleteChips.map((c) => ({ ...c, status: "not_started" as Status }));
             const newText = resetChips.map((c) => c.text).join(", ");
             carriedTasksInBlock.push({
               ...t,
@@ -291,21 +292,19 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
             });
           }
 
-          if (nonDoingChips.length > 0) {
-            const allDone = nonDoingChips.every((c) => c.status === "done");
-            const anyDoing = nonDoingChips.some((c) => c.status === "doing" || c.status === "done");
-            const status: Status = allDone ? "done" : anyDoing ? "doing" : "not_started";
-            const text = nonDoingChips.map((c) => c.text).join(", ");
+          // Only fully-done chips stay on today as a record
+          if (doneChips.length > 0) {
+            const text = doneChips.map((c) => c.text).join(", ");
             remainingTasksInBlock.push({
               ...t,
-              chips: nonDoingChips,
-              status,
+              chips: doneChips,
+              status: "done" as Status,
               text,
             });
           }
         } else {
-          // Plain task without chips
-          if (t.status === "doing") {
+          // Plain task without chips: carry if not done, keep on today only if done
+          if (t.status !== "done") {
             carriedTasksInBlock.push({
               ...t,
               id: prefix + t.id,
@@ -317,15 +316,14 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
         }
       }
 
-      // Today's list: keep section if it has remaining tasks
+      // Today's list: keep section only if it has done tasks (as a record)
       if (remainingTasksInBlock.length > 0) {
         if (block.section) newTodaySubTasks.push(block.section);
         newTodaySubTasks.push(...remainingTasksInBlock);
       }
 
-      // Tomorrow's list: include section tag with its carried subtasks
-      // If the section exists, it goes to tomorrow; any carried subtasks go under it
-      if (block.section || carriedTasksInBlock.length > 0) {
+      // Tomorrow's list: carry section along with its incomplete tasks
+      if (carriedTasksInBlock.length > 0 || block.section) {
         carriedBlocks.push({
           section: block.section,
           tasks: carriedTasksInBlock,
@@ -391,10 +389,11 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       status: "not_started" as Status,
     }));
 
-    // Check if there is anything to carry forward
+    // Check if there is anything to carry forward (tasks or sections with tasks)
     const totalCarriedTasks = carriedBlocks.reduce((acc, b) => acc + b.tasks.length, 0);
-    if (totalCarriedTasks === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0) {
-      alert("No tasks in 'Doing' status or meetings in 'Not Started'/'Doing' status to carry forward.");
+    const totalCarriedSections = carriedBlocks.filter((b) => b.section && b.tasks.length > 0).length;
+    if (totalCarriedTasks === 0 && totalCarriedSections === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0) {
+      alert("No incomplete tasks or meetings to carry forward. All tasks are done!");
       return;
     }
 
