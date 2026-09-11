@@ -21,6 +21,7 @@ export function createDayData(date: string): DayData {
     rating: 0,
     managerNotes: [],
     meetings: [],
+    events: [],
   };
 }
 
@@ -92,6 +93,9 @@ export async function loadState(): Promise<AppState> {
       if (!parsed.employees) {
         parsed.employees = [];
       }
+      if (!parsed.recurringEvents) {
+        parsed.recurringEvents = [];
+      }
       return cleanStateOfFatima(parsed);
     }
   } catch(err) {
@@ -130,6 +134,9 @@ export async function loadState(): Promise<AppState> {
        if (!parsed.employees) {
          parsed.employees = [];
        }
+       if (!parsed.recurringEvents) {
+         parsed.recurringEvents = [];
+       }
        const cleaned = cleanStateOfFatima(parsed);
        saveState(cleaned);
        return cleaned;
@@ -148,6 +155,7 @@ export async function loadState(): Promise<AppState> {
     contentPostedDates: [],
     projects: [],
     employees: [],
+    recurringEvents: [],
   };
 }
 

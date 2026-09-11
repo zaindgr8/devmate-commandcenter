@@ -63,7 +63,23 @@ export interface Meeting {
   projectId: string; // references Project.id OR custom project name
   employeeIds: string[]; // references Employee.id OR custom employee names
   time: string; // e.g. "14:30" or "10:30 AM"
+  date?: string; // e.g. "2026-09-11"
   status: Status; // "not_started" | "doing" | "done"
+}
+
+export type EventCategory = "Ours" | "Imp";
+export type EventRecurrence = "one_time" | "weekly";
+
+export interface EventItem {
+  id: string;
+  title: string;
+  category: EventCategory; // "Ours" | "Imp"
+  time?: string;
+  location?: string;
+  date?: string; // e.g. "2026-09-11"
+  recurrence?: EventRecurrence; // "one_time" | "weekly"
+  recurringDay?: number; // 0 = Sunday, ..., 6 = Saturday
+  status: Status;
 }
 
 export interface DayData {
@@ -73,6 +89,7 @@ export interface DayData {
   rating: number; // 0-5
   managerNotes: ManagerNote[];
   meetings?: Meeting[];
+  events?: EventItem[];
 }
 
 export type AppStatus = "In Development" | "In Review" | "Live" | "Paused" | "Idea";
@@ -119,6 +136,7 @@ export interface AppState {
   contentPostedDates?: string[]; // Array of date strings like "2026-04-21"
   projects?: Project[];
   employees?: Employee[];
+  recurringEvents?: EventItem[];
 }
 
 export type UserRole = "owner" | "manager";

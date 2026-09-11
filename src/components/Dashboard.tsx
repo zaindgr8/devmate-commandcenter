@@ -3,10 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, X, Pencil
+  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
-import { AppState, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, TaskChip, SubTaskItem } from "@/lib/types";
+import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
 import AppTrackerPanel from "./AppTrackerPanel";
@@ -215,11 +215,11 @@ function parseMeetingTime(text: string): { cleanText: string; time: string } {
   // 1. Remove @Meet or @Meeting or @Meetings (case-insensitive)
   clean = clean.replace(/@meets?\b|@meetings?\b/gi, "").trim();
 
-  // 2. Look for @time pattern:
-  // e.g. @2:30, @10:30am, @6pm, @230, @400, @1030, @6, @11
-  const timeMatch = clean.match(/@(\d{1,2}:\d{2}(?:am|pm)?|\d{1,2}(?:am|pm)|\d{3,4}(?:am|pm)?|[1-9]\b|1[0-2]\b)/i);
+  // 2. Look for @time pattern with optional space before am/pm:
+  // e.g. @2:30 PM, @2:30pm, @6pm, @230, @400, @1030, @6, @11
+  const timeMatch = clean.match(/@(\d{1,2}:\d{2}(?:\s*[ap]m)?|\d{1,2}(?:\s*[ap]m)|\d{3,4}(?:\s*[ap]m)?|[1-9]\b|1[0-2]\b)/i);
   if (timeMatch) {
-    const raw = timeMatch[1].toLowerCase();
+    const raw = timeMatch[1].toLowerCase().replace(/\s+/g, "");
     clean = clean.replace(timeMatch[0], "").trim();
 
     if (raw.includes(":")) {
@@ -229,10 +229,12 @@ function parseMeetingTime(text: string): { cleanText: string; time: string } {
       if (!raw.includes("am") && !raw.includes("pm")) {
         time = `${hour}:${min} ${hour >= 8 && hour <= 11 ? "AM" : "PM"}`;
       } else {
-        time = raw.toUpperCase();
+        time = `${hour}:${min} ${raw.includes("am") ? "AM" : "PM"}`;
       }
     } else if (raw.endsWith("am") || raw.endsWith("pm")) {
-      time = raw.toUpperCase();
+      const isAm = raw.endsWith("am");
+      const numPart = raw.replace(/[^\d]/g, "");
+      time = `${numPart}:00 ${isAm ? "AM" : "PM"}`;
     } else if (raw.length === 3) {
       // e.g. 230 -> 2:30 PM, 915 -> 9:15 AM/PM
       const hour = parseInt(raw[0], 10);
@@ -256,6 +258,8 @@ function parseMeetingTime(text: string): { cleanText: string; time: string } {
     }
   }
 
+  // Strip any lingering duplicate AM/PM or leading/trailing punctuation
+  clean = clean.replace(/\b(am|pm)\b/gi, "").trim();
   clean = clean.replace(/^[@\-:\s]+|[@\-:\s]+$/g, "").trim();
 
   return {
@@ -341,6 +345,133 @@ function extractMeetingsFromTasks(
             projectId: projName,
             employeeIds,
             time: parsed.time,
+            status: item.status,
+          },
+          sourceId: item.id,
+          sourceType: "plain",
+          isNote,
+        });
+      }
+    }
+  };
+
+  (subTasks || []).forEach((s) => processItem(s, false));
+  (managerNotes || []).forEach((n) => processItem(n, true));
+
+  return list;
+}
+
+function parseEventId(id: string): { isTaskEvent: boolean; taskId: string; chipIdx: number } {
+  if (id.startsWith("taskevent::")) {
+    const parts = id.slice("taskevent::".length).split("::");
+    const taskId = parts[0];
+    const chipIdx = parts[1] === "plain" ? -1 : parseInt(parts[1], 10);
+    return { isTaskEvent: true, taskId, chipIdx: isNaN(chipIdx) ? -1 : chipIdx };
+  }
+  return { isTaskEvent: false, taskId: "", chipIdx: -1 };
+}
+
+function extractEventsFromTasks(
+  subTasks: SubTask[],
+  managerNotes: ManagerNote[]
+): {
+  event: EventItem;
+  sourceId: string;
+  sourceType: "chip" | "plain";
+  chipIdx?: number;
+  isNote?: boolean;
+}[] {
+  const list: {
+    event: EventItem;
+    sourceId: string;
+    sourceType: "chip" | "plain";
+    chipIdx?: number;
+    isNote?: boolean;
+  }[] = [];
+
+  const isEventKeyword = (str?: string) =>
+    !!str && (/@events?(?:self|join)?\b/i.test(str) || /\bevents?(?:self|join)?\b/i.test(str) || /\b(luma|meetup|webinar)\b/i.test(str));
+
+  const isEventRow = (str?: string) => {
+    if (!str) return false;
+    const s = str.toLowerCase().replace(/^@/, "").trim();
+    return s === "events" || s === "event" || s === "eventsself" || s === "eventsjoin" || s === "ours" || s === "imp";
+  };
+
+  const determineCategory = (text: string, rowText: string): EventCategory => {
+    const combined = (text + " " + rowText).toLowerCase();
+    if (combined.includes("eventsjoin") || combined.includes("imp") || combined.includes("important") || combined.includes("join")) {
+      return "Imp";
+    }
+    return "Ours";
+  };
+
+  const processItem = (
+    item: { id: string; text?: string; content?: string; chips?: TaskChip[]; employee?: string; status: Status; isSection?: boolean },
+    isNote: boolean
+  ) => {
+    if (item.isSection) return;
+    const rowEmployee = (item.employee || "").trim();
+    const rowIsEvent = isEventRow(rowEmployee);
+
+    if (item.chips && item.chips.length > 0) {
+      item.chips.forEach((chip, cIdx) => {
+        const chipIsEvent = isEventKeyword(chip.text);
+        if (rowIsEvent || chipIsEvent) {
+          const category = determineCategory(chip.text, rowEmployee);
+          let title = chip.text.replace(/@events?(?:self|join)?\b/gi, "").trim();
+          if (!title) title = chip.text;
+          const subInfo = chip.subtasks && chip.subtasks.length > 0
+            ? ` (${chip.subtasks.filter((st) => st.status === "done").length}/${chip.subtasks.length})`
+            : "";
+
+          const timeMatch = chip.text.match(/@(\d{1,2}(?::\d{2})?(?:am|pm)?|\d{3,4})/i);
+          const time = timeMatch ? timeMatch[0].replace(/^@/, "") : undefined;
+          let location: string | undefined;
+          if (/luma/i.test(chip.text)) location = "Luma";
+          else if (/meetup/i.test(chip.text)) location = "MeetUp";
+          else if (/zoom/i.test(chip.text)) location = "Zoom";
+          else if (/whatsapp/i.test(chip.text)) location = "WhatsApp";
+
+          list.push({
+            event: {
+              id: `taskevent::${item.id}::${cIdx}`,
+              title: title + subInfo,
+              category,
+              time,
+              location,
+              status: chip.status,
+            },
+            sourceId: item.id,
+            sourceType: "chip",
+            chipIdx: cIdx,
+            isNote,
+          });
+        }
+      });
+    } else {
+      const text = item.text || item.content || "";
+      const textIsEvent = isEventKeyword(text);
+      if (rowIsEvent || textIsEvent) {
+        const category = determineCategory(text, rowEmployee);
+        let title = text.replace(/@events?(?:self|join)?\b/gi, "").trim();
+        if (!title) title = text;
+
+        const timeMatch = text.match(/@(\d{1,2}(?::\d{2})?(?:am|pm)?|\d{3,4})/i);
+        const time = timeMatch ? timeMatch[0].replace(/^@/, "") : undefined;
+        let location: string | undefined;
+        if (/luma/i.test(text)) location = "Luma";
+        else if (/meetup/i.test(text)) location = "MeetUp";
+        else if (/zoom/i.test(text)) location = "Zoom";
+        else if (/whatsapp/i.test(text)) location = "WhatsApp";
+
+        list.push({
+          event: {
+            id: `taskevent::${item.id}::plain`,
+            title,
+            category,
+            time,
+            location,
             status: item.status,
           },
           sourceId: item.id,
@@ -601,7 +732,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       }
     }
 
-    // 4. Process meetings
+    // 4. Process meetings & events
     const carryMeetings = (td.meetings || []).filter((m) => m.status === "not_started" || m.status === "doing");
     const remainingMeetings = (td.meetings || []).filter((m) => m.status === "done");
 
@@ -611,11 +742,20 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       status: "not_started" as Status,
     }));
 
+    const carryEvents = (td.events || []).filter((e) => e.status === "not_started" || e.status === "doing");
+    const remainingEvents = (td.events || []).filter((e) => e.status === "done");
+
+    const carriedEvents = carryEvents.map((e) => ({
+      ...e,
+      id: prefix + e.id,
+      status: "not_started" as Status,
+    }));
+
     // Check if there is anything to carry forward (tasks or sections with tasks)
     const totalCarriedTasks = carriedBlocks.reduce((acc, b) => acc + b.tasks.length, 0);
     const totalCarriedSections = carriedBlocks.filter((b) => b.section && b.tasks.length > 0).length;
-    if (totalCarriedTasks === 0 && totalCarriedSections === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0) {
-      alert("No incomplete tasks or meetings to carry forward. All tasks are done!");
+    if (totalCarriedTasks === 0 && totalCarriedSections === 0 && carriedNotes.length === 0 && carriedMeetings.length === 0 && carriedEvents.length === 0) {
+      alert("No incomplete tasks, meetings, or events to carry forward. All done!");
       return;
     }
 
@@ -698,12 +838,14 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       subTasks: newTodaySubTasks,
       managerNotes: newTodayNotes,
       meetings: remainingMeetings,
+      events: remainingEvents,
     };
     const updatedNext = {
       ...existingNext,
       subTasks: newNextSubTasks,
       managerNotes: [...carriedNotes, ...(existingNext.managerNotes || [])],
       meetings: [...carriedMeetings, ...(existingNext.meetings || [])],
+      events: [...carriedEvents, ...(existingNext.events || [])],
     };
 
     save({
@@ -716,10 +858,20 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const setDay = (fn: (d: typeof day) => typeof day) => save({ ...state, days: { ...state.days, [state.currentDate]: fn({ ...day }) } });
 
   const addMeeting = (m: Omit<Meeting, "id">) => {
-    setDay((d) => ({
-      ...d,
-      meetings: [...(d.meetings || []), { ...m, id: "meet_" + Date.now() }],
-    }));
+    const targetDate = m.date || state.currentDate;
+    const targetDay = state.days[targetDate] || createDayData(targetDate);
+    const newMeeting: Meeting = { ...m, date: targetDate, id: "meet_" + Date.now() };
+
+    save({
+      ...state,
+      days: {
+        ...state.days,
+        [targetDate]: {
+          ...targetDay,
+          meetings: [...(targetDay.meetings || []), newMeeting],
+        },
+      },
+    });
   };
 
   const deleteMeeting = (id: string) => {
@@ -763,10 +915,20 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       return;
     }
 
-    setDay((d) => ({
-      ...d,
-      meetings: (d.meetings || []).filter((meet) => meet.id !== id),
-    }));
+    const updatedDays = { ...state.days };
+    let found = false;
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.meetings && dVal.meetings.some((m) => m.id === id)) {
+        updatedDays[dKey] = {
+          ...dVal,
+          meetings: dVal.meetings.filter((m) => m.id !== id),
+        };
+        found = true;
+      }
+    }
+    if (found) {
+      save({ ...state, days: updatedDays });
+    }
   };
 
   const cycleMeetingStatus = (id: string) => {
@@ -780,17 +942,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
             const newChips = s.chips.map((c, i) => {
               if (i !== chipIdx) return c;
-              if (c.subtasks && c.subtasks.length > 0) {
-                const allDone = c.subtasks.every((st) => st.status === "done");
-                const nextStatus: Status = allDone ? "not_started" : "done";
-                return { ...c, status: nextStatus, subtasks: c.subtasks.map((st) => ({ ...st, status: nextStatus })) };
-              }
               const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
               return { ...c, status: nextStatus };
             });
-            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
-            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
-            return { ...s, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+            return { ...s, chips: newChips };
           } else {
             return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
           }
@@ -814,30 +969,369 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       return;
     }
 
-    setDay((d) => ({
-      ...d,
-      meetings: (d.meetings || []).map((meet) => {
-        if (meet.id === id) {
-          const idx = SCYCLE.indexOf(meet.status);
-          const next = SCYCLE[(idx + 1) % 3];
-          return { ...meet, status: next };
-        }
-        return meet;
-      }),
-    }));
+    const updatedDays = { ...state.days };
+    let found = false;
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.meetings && dVal.meetings.some((m) => m.id === id)) {
+        updatedDays[dKey] = {
+          ...dVal,
+          meetings: dVal.meetings.map((meet) => {
+            if (meet.id === id) {
+              const idx = SCYCLE.indexOf(meet.status);
+              const next = SCYCLE[(idx + 1) % 3];
+              return { ...meet, status: next };
+            }
+            return meet;
+          }),
+        };
+        found = true;
+      }
+    }
+    if (found) {
+      save({ ...state, days: updatedDays });
+    }
   };
 
-  const editMeeting = (id: string, updates: { projectId: string; time: string }) => {
+  const editMeeting = (id: string, updates: { projectId: string; time: string; date?: string }) => {
     const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+    const targetDate = updates.date || state.currentDate;
+    const cleanProject = updates.projectId.replace(/\b(am|pm)\b/gi, "").trim() || "Meeting";
+    const timeTag = updates.time ? (updates.time.startsWith("@") ? updates.time : `@${updates.time}`) : "@Meet";
+    const newText = `${cleanProject} ${timeTag}`.trim();
 
     if (isTaskMeeting) {
+      const updatedDays = { ...state.days };
+      updatedDays[state.currentDate] = { ...day };
+
+      let sourceDayKey = state.currentDate;
+      let foundInSubTasks = false;
+      let foundInNotes = false;
+
+      // Find which day currently contains this task
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        if (dVal.subTasks && dVal.subTasks.some((s) => s.id === taskId)) {
+          sourceDayKey = dKey;
+          foundInSubTasks = true;
+          break;
+        }
+        if (dVal.managerNotes && dVal.managerNotes.some((n) => n.id === taskId)) {
+          sourceDayKey = dKey;
+          foundInNotes = true;
+          break;
+        }
+      }
+
+      if (sourceDayKey === targetDate) {
+        // Date did not change - update in place
+        if (foundInSubTasks) {
+          const sDay = updatedDays[sourceDayKey];
+          updatedDays[sourceDayKey] = {
+            ...sDay,
+            subTasks: (sDay.subTasks || []).map((s) => {
+              if (s.id !== taskId) return s;
+              if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+                const newChips = s.chips.map((c, i) => (i === chipIdx ? { ...c, text: newText } : c));
+                return { ...s, chips: newChips, text: newChips.map((c) => c.text).join(", ") };
+              }
+              return { ...s, text: newText };
+            }),
+          };
+        } else if (foundInNotes) {
+          const sDay = updatedDays[sourceDayKey];
+          updatedDays[sourceDayKey] = {
+            ...sDay,
+            managerNotes: (sDay.managerNotes || []).map((n) => {
+              if (n.id !== taskId) return n;
+              if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+                const newChips = n.chips.map((c, i) => (i === chipIdx ? { ...c, text: newText } : c));
+                return { ...n, chips: newChips, content: newChips.map((c) => c.text).join(", ") };
+              }
+              return { ...n, content: newText };
+            }),
+          };
+        }
+      } else {
+        // Date CHANGED: Move the task/chip from sourceDayKey to targetDate
+        const sDay = updatedDays[sourceDayKey] || createDayData(sourceDayKey);
+        const tDay = updatedDays[targetDate] || createDayData(targetDate);
+
+        if (foundInSubTasks && sDay.subTasks) {
+          const sourceTask = sDay.subTasks.find((s) => s.id === taskId);
+          if (sourceTask) {
+            if (chipIdx >= 0 && sourceTask.chips && sourceTask.chips.length > 1) {
+              // Task has multiple chips: remove just this chip from source day
+              const movedChip = sourceTask.chips[chipIdx];
+              const remainingChips = sourceTask.chips.filter((_, i) => i !== chipIdx);
+              updatedDays[sourceDayKey] = {
+                ...sDay,
+                subTasks: sDay.subTasks.map((s) =>
+                  s.id === taskId ? { ...s, chips: remainingChips, text: remainingChips.map((c) => c.text).join(", ") } : s
+                ),
+              };
+              // Add new subtask row on targetDate for the moved chip
+              const newSubTask: SubTask = {
+                id: "st_" + Date.now(),
+                text: newText,
+                status: (movedChip.status || "not_started") as Status,
+                parentId: sourceTask.parentId || "",
+                chips: [{ text: newText, status: movedChip.status || "not_started" }],
+                employee: sourceTask.employee || "@Meetings",
+              };
+              updatedDays[targetDate] = {
+                ...tDay,
+                subTasks: [...(tDay.subTasks || []), newSubTask],
+              };
+            } else {
+              // Single chip or plain row: move entire subtask to targetDate
+              updatedDays[sourceDayKey] = {
+                ...sDay,
+                subTasks: sDay.subTasks.filter((s) => s.id !== taskId),
+              };
+              const updatedSubTask: SubTask = {
+                ...sourceTask,
+                text: newText,
+                chips: sourceTask.chips && sourceTask.chips.length > 0 ? [{ ...sourceTask.chips[0], text: newText }] : undefined,
+              };
+              updatedDays[targetDate] = {
+                ...tDay,
+                subTasks: [...(tDay.subTasks || []), updatedSubTask],
+              };
+            }
+          }
+        } else if (foundInNotes && sDay.managerNotes) {
+          const sourceNote = sDay.managerNotes.find((n) => n.id === taskId);
+          if (sourceNote) {
+            updatedDays[sourceDayKey] = {
+              ...sDay,
+              managerNotes: sDay.managerNotes.filter((n) => n.id !== taskId),
+            };
+            const updatedNote: ManagerNote = {
+              ...sourceNote,
+              content: newText,
+              chips: sourceNote.chips && sourceNote.chips.length > 0 ? [{ ...sourceNote.chips[0], text: newText }] : undefined,
+            };
+            updatedDays[targetDate] = {
+              ...tDay,
+              managerNotes: [...(tDay.managerNotes || []), updatedNote],
+            };
+          }
+        }
+      }
+
+      save({ ...state, days: updatedDays });
+      return;
+    }
+
+    const updatedDays = { ...state.days };
+    let movingMeeting: Meeting | undefined;
+
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.meetings && dVal.meetings.some((m) => m.id === id)) {
+        movingMeeting = dVal.meetings.find((m) => m.id === id);
+        updatedDays[dKey] = {
+          ...dVal,
+          meetings: dVal.meetings.filter((m) => m.id !== id),
+        };
+      }
+    }
+
+    const targetDay = updatedDays[targetDate] || createDayData(targetDate);
+    const updatedMeeting: Meeting = movingMeeting
+      ? { ...movingMeeting, projectId: cleanProject, time: updates.time, date: targetDate }
+      : { id, projectId: cleanProject, time: updates.time, date: targetDate, employeeIds: [], status: "not_started" as Status };
+
+    updatedDays[targetDate] = {
+      ...targetDay,
+      meetings: [...(targetDay.meetings || []), updatedMeeting],
+    };
+
+    save({
+      ...state,
+      days: updatedDays,
+    });
+  };
+
+  const addEvent = (e: Omit<EventItem, "id">) => {
+    const targetDate = e.date || state.currentDate;
+    const targetDay = state.days[targetDate] || createDayData(targetDate);
+    const recurringDay = new Date(targetDate + "T12:00:00").getDay();
+    const newEvent: EventItem = {
+      ...e,
+      date: targetDate,
+      recurrence: e.recurrence || "one_time",
+      recurringDay: e.recurrence === "weekly" ? recurringDay : undefined,
+      id: "event_" + Date.now(),
+    };
+
+    const updatedState = { ...state };
+    if (e.recurrence === "weekly") {
+      updatedState.recurringEvents = [...(updatedState.recurringEvents || []), newEvent];
+    }
+    updatedState.days = {
+      ...updatedState.days,
+      [targetDate]: {
+        ...targetDay,
+        events: [...(targetDay.events || []), newEvent],
+      },
+    };
+    save(updatedState);
+  };
+
+  const deleteEvent = (id: string) => {
+    if (!window.confirm("Remove this event?")) return;
+
+    const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
+
+    if (isTaskEvent) {
+      setDay((d) => ({
+        ...d,
+        subTasks: d.subTasks
+          .map((s) => {
+            if (s.id !== taskId) return s;
+            if (chipIdx >= 0 && s.chips) {
+              const nc = s.chips.filter((_, i) => i !== chipIdx);
+              return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
+            } else {
+              return { ...s, text: "" };
+            }
+          })
+          .filter((s) => {
+            if (s.isSection) return true;
+            if (s.chips && s.chips.length > 0) return true;
+            return s.text.trim().length > 0;
+          }),
+        managerNotes: d.managerNotes
+          .map((n) => {
+            if (n.id !== taskId) return n;
+            if (chipIdx >= 0 && n.chips) {
+              const nc = n.chips.filter((_, i) => i !== chipIdx);
+              return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
+            } else {
+              return { ...n, content: "" };
+            }
+          })
+          .filter((n) => {
+            if (n.chips && n.chips.length > 0) return true;
+            return n.content.trim().length > 0;
+          }),
+      }));
+      return;
+    }
+
+    const origRecId = id.startsWith("rec_") ? id.slice("rec_".length) : id;
+    const updatedDays = { ...state.days };
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.events && dVal.events.some((e) => e.id === id || e.id === origRecId)) {
+        updatedDays[dKey] = {
+          ...dVal,
+          events: dVal.events.filter((evt) => evt.id !== id && evt.id !== origRecId),
+        };
+      }
+    }
+    save({
+      ...state,
+      recurringEvents: (state.recurringEvents || []).filter((r) => r.id !== origRecId && r.id !== id),
+      days: updatedDays,
+    });
+  };
+
+  const cycleEventStatus = (id: string) => {
+    const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
+
+    if (isTaskEvent) {
       setDay((d) => ({
         ...d,
         subTasks: d.subTasks.map((s) => {
           if (s.id !== taskId) return s;
-          const timeTag = updates.time ? (updates.time.startsWith("@") ? updates.time : `@${updates.time}`) : "@Meet";
-          const newText = `${updates.projectId} ${timeTag}`.trim();
+          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+            const newChips = s.chips.map((c, i) => {
+              if (i !== chipIdx) return c;
+              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+              return { ...c, status: nextStatus };
+            });
+            return { ...s, chips: newChips };
+          } else {
+            return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
+          }
+        }),
+        managerNotes: d.managerNotes.map((n) => {
+          if (n.id !== taskId) return n;
+          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+            const newChips = n.chips.map((c, i) => {
+              if (i !== chipIdx) return c;
+              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+              return { ...c, status: nextStatus };
+            });
+            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
+            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
+            return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+          } else {
+            return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
+          }
+        }),
+      }));
+      return;
+    }
 
+    const origRecId = id.startsWith("rec_") ? id.slice("rec_".length) : id;
+    const updatedDays = { ...state.days };
+    let found = false;
+
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.events && dVal.events.some((e) => e.id === id || e.id === origRecId)) {
+        updatedDays[dKey] = {
+          ...dVal,
+          events: dVal.events.map((evt) => {
+            if (evt.id === id || evt.id === origRecId) {
+              const idx = SCYCLE.indexOf(evt.status);
+              const next = SCYCLE[(idx + 1) % 3];
+              return { ...evt, status: next };
+            }
+            return evt;
+          }),
+        };
+        found = true;
+      }
+    }
+
+    if (!found && id.startsWith("rec_")) {
+      const template = (state.recurringEvents || []).find((r) => r.id === origRecId);
+      if (template) {
+        const nextStatus: Status = "doing";
+        const targetDay = updatedDays[state.currentDate] || createDayData(state.currentDate);
+        updatedDays[state.currentDate] = {
+          ...targetDay,
+          events: [...(targetDay.events || []), { ...template, id, date: state.currentDate, status: nextStatus }],
+        };
+        found = true;
+      }
+    }
+
+    if (found) {
+      save({ ...state, days: updatedDays });
+    }
+  };
+
+  const editEvent = (
+    id: string,
+    updates: {
+      title: string;
+      category: EventCategory;
+      time?: string;
+      location?: string;
+      date?: string;
+      recurrence?: EventRecurrence;
+    }
+  ) => {
+    const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
+
+    if (isTaskEvent) {
+      setDay((d) => ({
+        ...d,
+        subTasks: d.subTasks.map((s) => {
+          if (s.id !== taskId) return s;
+          const newText = updates.title.trim();
           if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
             const newChips = s.chips.map((c, i) =>
               i === chipIdx ? { ...c, text: newText } : c
@@ -849,28 +1343,85 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
         }),
         managerNotes: d.managerNotes.map((n) => {
           if (n.id !== taskId) return n;
-          const timeTag = updates.time ? (updates.time.startsWith("@") ? updates.time : `@${updates.time}`) : "@Meet";
-          const newContent = `${updates.projectId} ${timeTag}`.trim();
-
+          const newText = updates.title.trim();
           if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
             const newChips = n.chips.map((c, i) =>
-              i === chipIdx ? { ...c, text: newContent } : c
+              i === chipIdx ? { ...c, text: newText } : c
             );
             return { ...n, chips: newChips, content: newChips.map((c) => c.text).join(", ") };
           } else {
-            return { ...n, content: newContent };
+            return { ...n, content: newText };
           }
         }),
       }));
       return;
     }
 
-    setDay((d) => ({
-      ...d,
-      meetings: (d.meetings || []).map((m) =>
-        m.id === id ? { ...m, projectId: updates.projectId, time: updates.time } : m
-      ),
-    }));
+    const origRecId = id.startsWith("rec_") ? id.slice("rec_".length) : id;
+    const targetDate = updates.date || state.currentDate;
+    const recurringDay = new Date(targetDate + "T12:00:00").getDay();
+
+    const updatedState = { ...state };
+    const updatedDays = { ...updatedState.days };
+
+    // Update in recurringEvents if applicable
+    if (updates.recurrence === "weekly") {
+      const existingIdx = (updatedState.recurringEvents || []).findIndex((r) => r.id === origRecId || r.id === id);
+      const updatedTemplate: EventItem = {
+        id: origRecId,
+        title: updates.title,
+        category: updates.category,
+        time: updates.time,
+        location: updates.location,
+        date: targetDate,
+        recurrence: "weekly",
+        recurringDay,
+        status: "not_started",
+      };
+      if (existingIdx >= 0) {
+        updatedState.recurringEvents = (updatedState.recurringEvents || []).map((r, i) =>
+          i === existingIdx ? updatedTemplate : r
+        );
+      } else {
+        updatedState.recurringEvents = [...(updatedState.recurringEvents || []), updatedTemplate];
+      }
+    } else {
+      updatedState.recurringEvents = (updatedState.recurringEvents || []).filter((r) => r.id !== origRecId && r.id !== id);
+    }
+
+    // Find and update event in whichever day it currently lives, moving to targetDate if needed
+    let movingEvent: EventItem | undefined;
+    for (const [dKey, dVal] of Object.entries(updatedDays)) {
+      if (dVal.events && dVal.events.some((e) => e.id === id || e.id === origRecId)) {
+        movingEvent = dVal.events.find((e) => e.id === id || e.id === origRecId);
+        updatedDays[dKey] = {
+          ...dVal,
+          events: dVal.events.filter((e) => e.id !== id && e.id !== origRecId),
+        };
+      }
+    }
+
+    const targetDay = updatedDays[targetDate] || createDayData(targetDate);
+    const updatedEventItem: EventItem = {
+      ...(movingEvent || {}),
+      id: origRecId,
+      title: updates.title,
+      category: updates.category,
+      time: updates.time,
+      location: updates.location,
+      date: targetDate,
+      recurrence: updates.recurrence || "one_time",
+      recurringDay: updates.recurrence === "weekly" ? recurringDay : undefined,
+      status: movingEvent ? movingEvent.status : "not_started",
+    };
+
+    updatedDays[targetDate] = {
+      ...targetDay,
+      events: [...(targetDay.events || []), updatedEventItem],
+    };
+
+    updatedState.days = updatedDays;
+    save(updatedState);
   };
 
   // cycleMain changes status (sleep/workout streak tracking) — recalc streaks here
@@ -1265,7 +1816,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   <DailyTodos
                     subTasks={day.subTasks as any}
                     managerNotes={day.managerNotes as any}
-                    pendingMeetingsCount={(day.meetings || []).filter((m) => m.status !== "done").length}
+                    pendingMeetingsCount={
+                      (day.meetings || []).filter((m) => m.status !== "done").length +
+                      (day.events || []).filter((e) => e.status !== "done").length
+                    }
                     inp={inp}
                     card={card}
                     onDoneForToday={doneForToday}
@@ -1295,20 +1849,9 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                           if (i !== chipIdx) return c;
                           const curStatus: Status = c.status || "not_started";
                           const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
-                          if (c.subtasks && c.subtasks.length > 0) {
-                            let newSubs = c.subtasks;
-                            if (nextStatus === "done") {
-                              newSubs = c.subtasks.map(st => ({ ...st, status: "done" as Status }));
-                            } else if (nextStatus === "not_started") {
-                              newSubs = c.subtasks.map(st => ({ ...st, status: "not_started" as Status }));
-                            }
-                            return { ...c, status: nextStatus, subtasks: newSubs };
-                          }
                           return { ...c, status: nextStatus };
                         });
-                        const allDone = newChips.length > 0 && newChips.every(c => c.status === "done");
-                        const anyDoing = newChips.some(c => c.status === "doing" || c.status === "done");
-                        return { ...s, chips: newChips, status: allDone ? "done" : anyDoing ? "doing" : "not_started" };
+                        return { ...s, chips: newChips };
                       })
                     }))}
                     onDelSub={(id) => delSub(id)}
@@ -1326,20 +1869,9 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                           if (i !== chipIdx) return c;
                           const curStatus: Status = c.status || "not_started";
                           const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
-                          if (c.subtasks && c.subtasks.length > 0) {
-                            let newSubs = c.subtasks;
-                            if (nextStatus === "done") {
-                              newSubs = c.subtasks.map(st => ({ ...st, status: "done" as Status }));
-                            } else if (nextStatus === "not_started") {
-                              newSubs = c.subtasks.map(st => ({ ...st, status: "not_started" as Status }));
-                            }
-                            return { ...c, status: nextStatus, subtasks: newSubs };
-                          }
                           return { ...c, status: nextStatus };
                         });
-                        const allDone = newChips.length > 0 && newChips.every(c => c.status === "done");
-                        const anyDoing = newChips.some(c => c.status === "doing" || c.status === "done");
-                        return { ...n, chips: newChips, status: allDone ? "done" : anyDoing ? "doing" : "not_started" };
+                        return { ...n, chips: newChips };
                       })
                     }))}
                     onDelNote={delNote}
@@ -1437,33 +1969,18 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                             const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
                             return { ...st, status: nextStatus };
                           });
-                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
-                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
-                          const nextParentStatus: Status = (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status;
-                          return { ...c, subtasks: newSubtasks, status: nextParentStatus };
+                          return { ...c, subtasks: newSubtasks };
                         });
                       };
                       if (list === "daily") {
                         setDay((d) => ({
                           ...d,
-                          subTasks: d.subTasks.map((s) => {
-                            if (s.id !== id || !s.chips) return s;
-                            const nc = updateChips(s.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...s, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          subTasks: d.subTasks.map((s) => (s.id === id && s.chips ? { ...s, chips: updateChips(s.chips) } : s)),
                         }));
                       } else {
                         setDay((d) => ({
                           ...d,
-                          managerNotes: d.managerNotes.map((n) => {
-                            if (n.id !== id || !n.chips) return n;
-                            const nc = updateChips(n.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...n, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          managerNotes: d.managerNotes.map((n) => (n.id === id && n.chips ? { ...n, chips: updateChips(n.chips) } : n)),
                         }));
                       }
                     }}
@@ -1473,34 +1990,26 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         return chips.map((c, i) => {
                           if (i !== chipIdx) return c;
                           const currentSubtasks = c.subtasks || [];
-                          const newSubtasks = [...currentSubtasks, { id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), text: text.trim(), status: "not_started" as Status }];
-                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
-                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
-                          const nextStatus: Status = (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status;
-                          return { ...c, subtasks: newSubtasks, status: nextStatus };
+                          const newSubtasks = [
+                            ...currentSubtasks,
+                            {
+                              id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+                              text: text.trim(),
+                              status: "not_started" as Status,
+                            },
+                          ];
+                          return { ...c, subtasks: newSubtasks };
                         });
                       };
                       if (list === "daily") {
                         setDay((d) => ({
                           ...d,
-                          subTasks: d.subTasks.map((s) => {
-                            if (s.id !== id || !s.chips) return s;
-                            const nc = updateChips(s.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...s, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          subTasks: d.subTasks.map((s) => (s.id === id && s.chips ? { ...s, chips: updateChips(s.chips) } : s)),
                         }));
                       } else {
                         setDay((d) => ({
                           ...d,
-                          managerNotes: d.managerNotes.map((n) => {
-                            if (n.id !== id || !n.chips) return n;
-                            const nc = updateChips(n.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...n, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          managerNotes: d.managerNotes.map((n) => (n.id === id && n.chips ? { ...n, chips: updateChips(n.chips) } : n)),
                         }));
                       }
                     }}
@@ -1529,36 +2038,21 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         return chips.map((c, i) => {
                           if (i !== chipIdx || !c.subtasks) return c;
                           const newSubtasks = c.subtasks.filter((_, si) => si !== subtaskIdx);
-                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
-                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
                           return {
                             ...c,
                             subtasks: newSubtasks.length > 0 ? newSubtasks : undefined,
-                            status: newSubtasks.length > 0 ? (allDone ? "done" : anyDoing ? "doing" : "not_started") : c.status,
                           };
                         });
                       };
                       if (list === "daily") {
                         setDay((d) => ({
                           ...d,
-                          subTasks: d.subTasks.map((s) => {
-                            if (s.id !== id || !s.chips) return s;
-                            const nc = updateChips(s.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...s, chips: nc, status: (nc.length === 0 ? "not_started" : allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          subTasks: d.subTasks.map((s) => (s.id === id && s.chips ? { ...s, chips: updateChips(s.chips) } : s)),
                         }));
                       } else {
                         setDay((d) => ({
                           ...d,
-                          managerNotes: d.managerNotes.map((n) => {
-                            if (n.id !== id || !n.chips) return n;
-                            const nc = updateChips(n.chips);
-                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
-                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
-                            return { ...n, chips: nc, status: (nc.length === 0 ? "not_started" : allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-                          }),
+                          managerNotes: d.managerNotes.map((n) => (n.id === id && n.chips ? { ...n, chips: updateChips(n.chips) } : n)),
                         }));
                       }
                     }}
@@ -1594,31 +2088,9 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
               {tab === "employees" && <EmployeesPanel state={state} onSave={save} />}
             </div>
 
-            {/* ═══ RIGHT SIDEBAR (Goals & Meetings) ═══ */}
+            {/* ═══ RIGHT SIDEBAR (Meetings & Events Tracker) ═══ */}
             <div style={{ width: 320, flexShrink: 0, padding: "28px 32px 28px 0", display: tab === "tasks" ? "block" : "none" }}>
-                <div style={{ position: "sticky", top: 28, display: "flex", flexDirection: "column", gap: 32 }}>
-
-                  {/* Daily Meetings Section */}
-                  {(() => {
-                    const taskMeetings = extractMeetingsFromTasks(day.subTasks || [], day.managerNotes || []);
-                    const allMeetings: Meeting[] = [
-                      ...(day.meetings || []),
-                      ...taskMeetings.map((item) => item.meeting),
-                    ];
-                    return (
-                      <MeetingsSection
-                        meetings={allMeetings}
-                        projects={state.projects || []}
-                        employees={state.employees || []}
-                        cardStyle={card}
-                        inputStyle={inp}
-                        onAddMeeting={addMeeting}
-                        onDeleteMeeting={deleteMeeting}
-                        onCycleStatus={cycleMeetingStatus}
-                        onEditMeeting={editMeeting}
-                      />
-                    );
-                  })()}
+                <div style={{ position: "sticky", top: 28, display: "flex", flexDirection: "column", gap: 28 }}>
 
                   {/* Employee Tasks Overview Section */}
                   <EmployeeTasksSection
@@ -1628,61 +2100,141 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     cardStyle={card}
                   />
 
-                  {/* Goals Overview */}
-                  {state.goals && state.goals.length > 0 && (
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                        <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Goals Overview</h3>
-                      </div>
+                  {/* Two Main Categories: Meetings & Events (Ours | Imp) */}
+                  {(() => {
+                    const meetingMap = new Map<string, Meeting>();
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {state.goals.map((goal) => {
-                          const pct = Math.min(100, Math.round((goal.current / goal.target) * 100)) || 0;
-                          return (
-                            <div
-                              key={goal.id}
-                              draggable
-                              onDragStart={(e) => {
-                                setDraggedGoal(goal.id);
-                                e.dataTransfer.effectAllowed = "move";
-                              }}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                if (draggedGoal && draggedGoal !== goal.id) {
-                                  const newGoals = [...state.goals];
-                                  const sIdx = newGoals.findIndex(g => g.id === draggedGoal);
-                                  const tIdx = newGoals.findIndex(g => g.id === goal.id);
-                                  const [rem] = newGoals.splice(sIdx, 1);
-                                  newGoals.splice(tIdx, 0, rem);
-                                  save({ ...state, goals: newGoals });
-                                }
-                                setDraggedGoal(null);
-                              }}
-                              style={{ ...card, padding: "16px", cursor: "grab", opacity: draggedGoal === goal.id ? 0.5 : 1 }}
-                            >
-                              <div style={{ fontSize: 13, fontWeight: 600, color: "#1C1917", marginBottom: 8 }}>{goal.title}</div>
-                              <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 12 }}>
-                                <span style={{ fontSize: 20, fontWeight: 700, color: goal.color || "#2563EB", fontFamily: "'Fraunces', serif" }}>
-                                  {goal.unit === "$" ? `$${goal.current.toLocaleString()}` : goal.current.toLocaleString()}
-                                </span>
-                                <span style={{ fontSize: 11, color: "#A8A29E" }}>
-                                  / {goal.unit === "$" ? `$${goal.target.toLocaleString()}` : goal.target.toLocaleString()}
-                                </span>
-                              </div>
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontWeight: 700, color: "#78716C", marginBottom: 4 }}>
-                                <span>PROGRESS</span>
-                                <span>{pct}%</span>
-                              </div>
-                              <div style={{ width: "100%", height: 6, borderRadius: 3, background: "#F5F5F4" }}>
-                                <div style={{ height: "100%", background: goal.color || "#2563EB", width: `${pct}%`, borderRadius: 3, transition: "width 0.5s ease" }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                    // 1. Scan all days for task meetings & direct meetings
+                    for (const [dKey, dVal] of Object.entries(state.days || {})) {
+                      if (!dVal) continue;
+                      const dTaskMeetings = extractMeetingsFromTasks(dVal.subTasks || [], dVal.managerNotes || []);
+                      dTaskMeetings.forEach((item) => {
+                        if (dKey >= state.currentDate || item.meeting.status !== "done") {
+                          meetingMap.set(item.meeting.id, { ...item.meeting, date: item.meeting.date || dKey });
+                        }
+                      });
+                      (dVal.meetings || []).forEach((m) => {
+                        if (dKey >= state.currentDate || m.status !== "done") {
+                          meetingMap.set(m.id, { ...m, date: m.date || dKey });
+                        }
+                      });
+                    }
+
+                    // 2. Merge current active in-memory day
+                    const curTaskMeetings = extractMeetingsFromTasks(day.subTasks || [], day.managerNotes || []);
+                    curTaskMeetings.forEach((item) => {
+                      meetingMap.set(item.meeting.id, { ...item.meeting, date: item.meeting.date || state.currentDate });
+                    });
+                    (day.meetings || []).forEach((m) => {
+                      meetingMap.set(m.id, { ...m, date: m.date || state.currentDate });
+                    });
+
+                    const allMeetings = Array.from(meetingMap.values()).sort((a, b) => {
+                      const dateA = a.date || "";
+                      const dateB = b.date || "";
+                      if (dateA === state.currentDate && dateB !== state.currentDate) return -1;
+                      if (dateB === state.currentDate && dateA !== state.currentDate) return 1;
+                      return dateA.localeCompare(dateB);
+                    });
+
+                    const eventMap = new Map<string, EventItem>();
+
+                    // 1. Scan all days for task events & direct events
+                    for (const [dKey, dVal] of Object.entries(state.days || {})) {
+                      if (!dVal) continue;
+                      const dTaskEvents = extractEventsFromTasks(dVal.subTasks || [], dVal.managerNotes || []);
+                      dTaskEvents.forEach((item) => {
+                        if (dKey >= state.currentDate || item.event.status !== "done") {
+                          eventMap.set(item.event.id, { ...item.event, date: item.event.date || dKey });
+                        }
+                      });
+                      (dVal.events || []).forEach((evt) => {
+                        if (dKey >= state.currentDate || evt.status !== "done") {
+                          eventMap.set(evt.id, { ...evt, date: evt.date || dKey });
+                        }
+                      });
+                    }
+
+                    // 2. Merge current active in-memory day
+                    const curTaskEvents = extractEventsFromTasks(day.subTasks || [], day.managerNotes || []);
+                    curTaskEvents.forEach((item) => {
+                      eventMap.set(item.event.id, { ...item.event, date: item.event.date || state.currentDate });
+                    });
+                    (day.events || []).forEach((evt) => {
+                      eventMap.set(evt.id, { ...evt, date: evt.date || state.currentDate });
+                    });
+
+                    // 4. All recurring events from library
+                    (state.recurringEvents || []).forEach((re) => {
+                      const alreadyInMap = Array.from(eventMap.values()).some(
+                        (e) => e.id === re.id || e.id === `rec_${re.id}` || (e.title === re.title && e.category === re.category)
+                      );
+                      if (!alreadyInMap) {
+                        eventMap.set(`rec_${re.id}`, {
+                          ...re,
+                          id: `rec_${re.id}`,
+                          date: re.date || state.currentDate,
+                          status: "not_started" as Status,
+                        });
+                      }
+                    });
+
+                    const allEvents = Array.from(eventMap.values()).sort((a, b) => {
+                      const dateA = a.date || "";
+                      const dateB = b.date || "";
+                      if (dateA === state.currentDate && dateB !== state.currentDate) return -1;
+                      if (dateB === state.currentDate && dateA !== state.currentDate) return 1;
+                      return dateA.localeCompare(dateB);
+                    });
+                    return (
+                      <MeetingsAndEventsSection
+                        currentDate={state.currentDate}
+                        meetings={allMeetings}
+                        events={allEvents}
+                        projects={state.projects || []}
+                        employees={state.employees || []}
+                        cardStyle={card}
+                        inputStyle={inp}
+                        onAddMeeting={addMeeting}
+                        onDeleteMeeting={deleteMeeting}
+                        onCycleMeetingStatus={cycleMeetingStatus}
+                        onEditMeeting={editMeeting}
+                        onAddEvent={addEvent}
+                        onDeleteEvent={deleteEvent}
+                        onCycleEventStatus={cycleEventStatus}
+                        onEditEvent={editEvent}
+                      />
+                    );
+                  })()}
+
+                  {/* ─── GOAL SECTION (Displayed directly after Tracker) ─── */}
+                  <GoalsOverviewSection
+                    goals={state.goals || []}
+                    cardStyle={card}
+                    inputStyle={inp}
+                    draggedGoal={draggedGoal}
+                    setDraggedGoal={setDraggedGoal}
+                    onNavigateToGoals={() => setTab("goals")}
+                    onAddGoal={(g) => {
+                      const newG: Goal = { ...g, id: "g_" + Date.now() };
+                      save({ ...state, goals: [...(state.goals || []), newG] });
+                    }}
+                    onUpdateGoal={(id, updates) => {
+                      save({
+                        ...state,
+                        goals: (state.goals || []).map((g) => (g.id === id ? { ...g, ...updates } : g)),
+                      });
+                    }}
+                    onDeleteGoal={(id) => {
+                      save({
+                        ...state,
+                        goals: (state.goals || []).filter((g) => g.id !== id),
+                      });
+                    }}
+                    onReorderGoals={(newGoals) => {
+                      save({ ...state, goals: newGoals });
+                    }}
+                  />
 
                 </div>
             </div>
@@ -1693,42 +2245,121 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   );
 }
 
-/* ─── Meetings Section Component ─── */
-interface MeetingsSectionProps {
+/* ─── Meetings & Events Tracker Section Component ─── */
+const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAYS_OF_WEEK_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function getDayName(dStr?: string) {
+  if (!dStr) return "";
+  try {
+    const d = new Date(dStr + "T12:00:00");
+    return isNaN(d.getTime()) ? "" : DAYS_OF_WEEK[d.getDay()];
+  } catch {
+    return "";
+  }
+}
+
+function formatDateDisplay(dStr?: string) {
+  if (!dStr) return "";
+  try {
+    const d = new Date(dStr + "T12:00:00");
+    if (isNaN(d.getTime())) return dStr;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  } catch {
+    return dStr;
+  }
+}
+
+/* ─── Meetings & Events Tracker Section Component ─── */
+interface MeetingsAndEventsSectionProps {
+  currentDate: string;
   meetings: Meeting[];
+  events: EventItem[];
   projects: Project[];
   employees: Employee[];
   cardStyle: React.CSSProperties;
   inputStyle: React.CSSProperties;
   onAddMeeting: (m: Omit<Meeting, "id">) => void;
   onDeleteMeeting: (id: string) => void;
-  onCycleStatus: (id: string) => void;
-  onEditMeeting?: (id: string, updates: { projectId: string; time: string }) => void;
+  onCycleMeetingStatus: (id: string) => void;
+  onEditMeeting?: (id: string, updates: { projectId: string; time: string; date?: string }) => void;
+  onAddEvent: (e: Omit<EventItem, "id">) => void;
+  onDeleteEvent: (id: string) => void;
+  onCycleEventStatus: (id: string) => void;
+  onEditEvent?: (id: string, updates: { title: string; category: EventCategory; time?: string; location?: string; date?: string; recurrence?: EventRecurrence }) => void;
 }
 
-function MeetingsSection({
+function MeetingsAndEventsSection({
+  currentDate,
   meetings,
+  events,
   projects,
   employees,
   cardStyle,
   inputStyle,
   onAddMeeting,
   onDeleteMeeting,
-  onCycleStatus,
+  onCycleMeetingStatus,
   onEditMeeting,
-}: MeetingsSectionProps) {
-  const [showAddForm, setShowAddForm] = useState(false);
+  onAddEvent,
+  onDeleteEvent,
+  onCycleEventStatus,
+  onEditEvent,
+}: MeetingsAndEventsSectionProps) {
+  // Main view switcher
+  // Main view switcher
+  const [viewMode, setViewMode] = useState<"all" | "meetings" | "events" | "events_ours" | "events_imp">("all");
+
+  // Tracker collapse toggle state
+  const [trackerOpen, setTrackerOpen] = useState(true);
+
+  // Date scope filter (default: "today")
+  const [dateScope, setDateScope] = useState<"today" | "upcoming" | "all">("today");
+
+  // Accordion dropdown states
+  const [meetingsOpen, setMeetingsOpen] = useState(true);
+  const [eventsOpen, setEventsOpen] = useState(true);
+
+  // Filter dropdowns
+  const [meetingFilter, setMeetingFilter] = useState<"all" | "pending" | "done">("all");
+  const [eventFilter, setEventFilter] = useState<"all" | "ours" | "imp" | "recurring">("all");
+
+  // ── Meetings Form State ──
+  const [showAddMeetingForm, setShowAddMeetingForm] = useState(false);
   const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editTime, setEditTime] = useState("");
+  const [editMeetingTitle, setEditMeetingTitle] = useState("");
+  const [editMeetingTime, setEditMeetingTime] = useState("");
+  const [editMeetingDate, setEditMeetingDate] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [customProjectName, setCustomProjectName] = useState("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [customEmployeeNames, setCustomEmployeeNames] = useState("");
   const [meetingTime, setMeetingTime] = useState("");
-
+  const [meetingDate, setMeetingDate] = useState(currentDate);
   const [showEmpDropdown, setShowEmpDropdown] = useState(false);
   const empDropRef = useRef<HTMLDivElement>(null);
+
+  // Sync date when currentDate changes
+  useEffect(() => {
+    setMeetingDate(currentDate);
+    setEventDate(currentDate);
+  }, [currentDate]);
+
+  // ── Events Form State ──
+  const [showAddEventForm, setShowAddEventForm] = useState(false);
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventCategory, setEventCategory] = useState<EventCategory>("Ours");
+  const [eventTime, setEventTime] = useState("");
+  const [eventLocation, setEventLocation] = useState("");
+  const [eventDate, setEventDate] = useState(currentDate);
+  const [eventRecurrence, setEventRecurrence] = useState<EventRecurrence>("one_time");
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editEventTitle, setEditEventTitle] = useState("");
+  const [editEventCategory, setEditEventCategory] = useState<EventCategory>("Ours");
+  const [editEventTime, setEditEventTime] = useState("");
+  const [editEventLocation, setEditEventLocation] = useState("");
+  const [editEventDate, setEditEventDate] = useState("");
+  const [editEventRecurrence, setEditEventRecurrence] = useState<EventRecurrence>("one_time");
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1740,12 +2371,12 @@ function MeetingsSection({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleAdd = () => {
+  const handleAddMeeting = () => {
     let proj = selectedProjectId;
     if (proj === "custom") {
       proj = customProjectName.trim();
     } else {
-      const found = projects.find(p => p.id === selectedProjectId);
+      const found = projects.find((p) => p.id === selectedProjectId);
       proj = found ? found.name : selectedProjectId;
     }
 
@@ -1755,13 +2386,13 @@ function MeetingsSection({
     }
 
     const emps: string[] = [];
-    selectedEmployeeIds.forEach(id => {
-      const found = employees.find(e => e.id === id);
+    selectedEmployeeIds.forEach((id) => {
+      const found = employees.find((e) => e.id === id);
       if (found) emps.push(found.name);
     });
 
     if (customEmployeeNames.trim()) {
-      customEmployeeNames.split(",").forEach(name => {
+      customEmployeeNames.split(",").forEach((name) => {
         const clean = name.trim();
         if (clean && !emps.includes(clean)) emps.push(clean);
       });
@@ -1777,30 +2408,92 @@ function MeetingsSection({
       return;
     }
 
+    const targetDate = meetingDate || currentDate;
     onAddMeeting({
       projectId: proj,
       employeeIds: emps,
       time: meetingTime.trim(),
-      status: "not_started"
+      date: targetDate,
+      status: "not_started",
     });
+
+    setMeetingsOpen(true);
+    if (targetDate !== currentDate) {
+      setDateScope(targetDate > currentDate ? "upcoming" : "all");
+    }
 
     setSelectedProjectId("");
     setCustomProjectName("");
     setSelectedEmployeeIds([]);
     setCustomEmployeeNames("");
     setMeetingTime("");
-    setShowAddForm(false);
+    setMeetingDate(currentDate);
+    setShowAddMeetingForm(false);
+  };
+
+  const handleAddEvent = () => {
+    if (!eventTitle.trim()) {
+      alert("Please enter an event title.");
+      return;
+    }
+
+    const targetDate = eventDate || currentDate;
+    onAddEvent({
+      title: eventTitle.trim(),
+      category: eventCategory,
+      time: eventTime.trim() || undefined,
+      location: eventLocation.trim() || undefined,
+      date: targetDate,
+      recurrence: eventRecurrence,
+      status: "not_started",
+    });
+
+    setEventsOpen(true);
+    if (targetDate !== currentDate) {
+      setDateScope(targetDate > currentDate ? "upcoming" : "all");
+    }
+
+    setEventTitle("");
+    setEventCategory("Ours");
+    setEventTime("");
+    setEventLocation("");
+    setEventDate(currentDate);
+    setEventRecurrence("one_time");
+    setShowAddEventForm(false);
+  };
+
+  const handleSaveEditMeeting = (id: string) => {
+    if (!editMeetingTitle.trim()) return;
+    onEditMeeting?.(id, {
+      projectId: editMeetingTitle.trim(),
+      time: editMeetingTime.trim(),
+      date: editMeetingDate || currentDate,
+    });
+    setEditingMeetingId(null);
+  };
+
+  const handleSaveEditEvent = (id: string) => {
+    if (!editEventTitle.trim()) return;
+    onEditEvent?.(id, {
+      title: editEventTitle.trim(),
+      category: editEventCategory,
+      time: editEventTime.trim() || undefined,
+      location: editEventLocation.trim() || undefined,
+      date: editEventDate || currentDate,
+      recurrence: editEventRecurrence,
+    });
+    setEditingEventId(null);
   };
 
   const getProjectColor = (projName: string) => {
-    const found = projects.find(p => p.name === projName);
+    const found = projects.find((p) => p.name === projName);
     return found ? found.color : "#6B7280";
   };
 
   const initials = (name: string) => {
     return name
       .split(" ")
-      .map(w => w[0])
+      .map((w) => w[0])
       .join("")
       .toUpperCase()
       .slice(0, 2);
@@ -1823,445 +2516,1618 @@ function MeetingsSection({
     done: { bg: "#F0FDF4", dot: "#16A34A", text: "#16A34A", border: "#BBF7D0" },
   };
 
-  const handleSaveEdit = (id: string) => {
-    if (!editTitle.trim()) return;
-    onEditMeeting?.(id, { projectId: editTitle.trim(), time: editTime.trim() });
-    setEditingMeetingId(null);
+  const currentDayOfWeek = new Date(currentDate + "T12:00:00").getDay();
+
+  const isTodayMeeting = (m: Meeting) => {
+    if (!m.date) return true;
+    return m.date === currentDate;
   };
 
+  const isTodayEvent = (e: EventItem) => {
+    if (!e.date) return true;
+    if (e.date === currentDate) return true;
+    if (e.recurrence === "weekly" && typeof e.recurringDay === "number" && e.recurringDay === currentDayOfWeek) {
+      return true;
+    }
+    return false;
+  };
+
+  const isUpcomingMeeting = (m: Meeting) => {
+    if (!m.date) return false;
+    return m.date > currentDate;
+  };
+
+  const isUpcomingEvent = (e: EventItem) => {
+    if (e.date && e.date > currentDate) return true;
+    if (e.recurrence === "weekly" && typeof e.recurringDay === "number" && e.recurringDay !== currentDayOfWeek) {
+      return true;
+    }
+    return false;
+  };
+
+  // Date Scoped lists (Today by default)
+  const dateScopedMeetings = meetings.filter((m) => {
+    if (dateScope === "today") return isTodayMeeting(m);
+    if (dateScope === "upcoming") return isUpcomingMeeting(m);
+    return true;
+  });
+
+  const dateScopedEvents = events.filter((e) => {
+    if (dateScope === "today") return isTodayEvent(e);
+    if (dateScope === "upcoming") return isUpcomingEvent(e);
+    return true;
+  });
+
+  const todayMeetingsCount = meetings.filter(isTodayMeeting).length;
+  const todayEventsCount = events.filter(isTodayEvent).length;
+  const upcomingMeetingsCount = meetings.filter(isUpcomingMeeting).length;
+  const upcomingEventsCount = events.filter(isUpcomingEvent).length;
+
+  // Counts based on active date scope
+  const pendingMeetingsCount = dateScopedMeetings.filter((m) => m.status !== "done").length;
+  const doneMeetingsCount = dateScopedMeetings.filter((m) => m.status === "done").length;
+
+  const oursEventsCount = dateScopedEvents.filter((e) => e.category === "Ours").length;
+  const impEventsCount = dateScopedEvents.filter((e) => e.category === "Imp").length;
+  const recurringEventsCount = dateScopedEvents.filter((e) => e.recurrence === "weekly").length;
+
+  // Filtered lists
+  const filteredMeetings = dateScopedMeetings.filter((m) => {
+    if (meetingFilter === "pending") return m.status !== "done";
+    if (meetingFilter === "done") return m.status === "done";
+    return true;
+  });
+
+  const effectiveEventFilter =
+    viewMode === "events_ours" ? "ours" : viewMode === "events_imp" ? "imp" : eventFilter;
+
+  const filteredEvents = dateScopedEvents.filter((e) => {
+    if (effectiveEventFilter === "ours") return e.category === "Ours";
+    if (effectiveEventFilter === "imp") return e.category === "Imp";
+    if (effectiveEventFilter === "recurring") return e.recurrence === "weekly";
+    return true;
+  });
+
+  const showMeetingsSection = viewMode === "all" || viewMode === "meetings";
+  const showEventsSection = viewMode === "all" || viewMode.startsWith("events");
+
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Daily Meetings</h3>
-        {!showAddForm && (
-          <button
-            onClick={() => setShowAddForm(true)}
+    <div style={{ display: "flex", flexDirection: "column", gap: trackerOpen ? 16 : 0 }}>
+      {/* ── Top Header Toolbar with Minimize Dropdown & Category Selector ── */}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: trackerOpen ? 8 : 0 }}>
+          <div
+            onClick={() => setTrackerOpen(!trackerOpen)}
+            style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+            title="Click dropdown chevron to toggle Tracker"
+          >
+            <button
+              type="button"
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                color: "#78716C"
+              }}
+            >
+              {trackerOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            <Calendar size={13} color="#78716C" />
+            <h3 style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1.2, color: "#78716C", margin: 0 }}>
+              Tracker
+            </h3>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "1px 6px",
+                borderRadius: 10,
+                background: "#F5F5F4",
+                color: "#78716C"
+              }}
+            >
+              {dateScopedMeetings.length + dateScopedEvents.length}
+            </span>
+          </div>
+
+          {/* Top Category Selector Dropdown */}
+          <select
+            value={viewMode}
+            onChange={(e) => {
+              setViewMode(e.target.value as any);
+              if (!trackerOpen) setTrackerOpen(true);
+            }}
             style={{
-              background: "none", border: "none", color: "#2563EB", fontSize: 11, fontWeight: 700,
-              cursor: "pointer", display: "flex", alignItems: "center", gap: 3
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 8px",
+              borderRadius: 7,
+              border: "1px solid #E7E5E4",
+              background: "#FAFAF9",
+              color: "#1C1917",
+              cursor: "pointer",
+              outline: "none"
             }}
           >
-            <Plus size={12} /> Add Meeting
-          </button>
+            <option value="all">All (Meetings & Events)</option>
+            <option value="meetings">Meetings ({dateScopedMeetings.length})</option>
+            <option value="events">Events ({dateScopedEvents.length})</option>
+            <option value="events_ours">↳ Events: Ours ({oursEventsCount})</option>
+            <option value="events_imp">↳ Events: Imp ({impEventsCount})</option>
+          </select>
+        </div>
+
+        {trackerOpen && (
+          <>
+            {/* ── DATE FILTER BAR (Default: Today) ── */}
+            <div style={{ display: "flex", gap: 4, padding: 3, background: "#F5F5F4", borderRadius: 8, marginBottom: 6 }}>
+              <button
+                onClick={() => setDateScope("today")}
+                style={{
+                  flex: 1.1,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: dateScope === "today" ? "#fff" : "transparent",
+                  color: dateScope === "today" ? "#2563EB" : "#78716C",
+                  boxShadow: dateScope === "today" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 4
+                }}
+              >
+                <Calendar size={11} color={dateScope === "today" ? "#2563EB" : "#78716C"} /> Today ({todayMeetingsCount + todayEventsCount})
+              </button>
+              <button
+                onClick={() => setDateScope("upcoming")}
+                style={{
+                  flex: 1.1,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: dateScope === "upcoming" ? "#fff" : "transparent",
+                  color: dateScope === "upcoming" ? "#7C3AED" : "#78716C",
+                  boxShadow: dateScope === "upcoming" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s"
+                }}
+              >
+                Upcoming ({upcomingMeetingsCount + upcomingEventsCount})
+              </button>
+              <button
+                onClick={() => setDateScope("all")}
+                style={{
+                  flex: 1,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: dateScope === "all" ? "#fff" : "transparent",
+                  color: dateScope === "all" ? "#1C1917" : "#78716C",
+                  boxShadow: dateScope === "all" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s"
+                }}
+              >
+                All Dates ({meetings.length + events.length})
+              </button>
+            </div>
+
+            {/* Quick Category Tab Pills */}
+            <div style={{ display: "flex", gap: 4, padding: 3, background: "#F5F5F4", borderRadius: 8 }}>
+              <button
+                onClick={() => setViewMode("all")}
+                style={{
+                  flex: 1,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: viewMode === "all" ? "#fff" : "transparent",
+                  color: viewMode === "all" ? "#1C1917" : "#78716C",
+                  boxShadow: viewMode === "all" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s"
+                }}
+              >
+                All ({dateScopedMeetings.length + dateScopedEvents.length})
+              </button>
+              <button
+                onClick={() => {
+                  setViewMode("meetings");
+                  setMeetingsOpen(true);
+                }}
+                style={{
+                  flex: 1.2,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: viewMode === "meetings" ? "#fff" : "transparent",
+                  color: viewMode === "meetings" ? "#2563EB" : "#78716C",
+                  boxShadow: viewMode === "meetings" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s"
+                }}
+              >
+                Meetings ({dateScopedMeetings.length})
+              </button>
+              <button
+                onClick={() => {
+                  setViewMode("events");
+                  setEventsOpen(true);
+                }}
+                style={{
+                  flex: 1.4,
+                  padding: "4px 0",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  background: viewMode.startsWith("events") ? "#fff" : "transparent",
+                  color: viewMode.startsWith("events") ? "#7C3AED" : "#78716C",
+                  boxShadow: viewMode.startsWith("events") ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  transition: "all 0.15s"
+                }}
+              >
+                Events ({dateScopedEvents.length})
+              </button>
+            </div>
+          </>
         )}
       </div>
 
-      {showAddForm && (
-        <div style={{ ...cardStyle, padding: 12, marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#78716C" }}>NEW MEETING</span>
-            <button
-              onClick={() => { setShowAddForm(false); setShowEmpDropdown(false); }}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#A8A29E" }}
+      {trackerOpen && (
+        <>
+      {/* ══════════════════════════════════════════
+          CATEGORY 1: MEETINGS (WITH DROPDOWNS)
+         ══════════════════════════════════════════ */}
+      {showMeetingsSection && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {/* Header Row */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              paddingBottom: 4,
+              borderBottom: "1px solid #F5F5F4"
+            }}
+          >
+            <div
+              onClick={() => setMeetingsOpen(!meetingsOpen)}
+              style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+              title="Click dropdown chevron to toggle meetings"
             >
-              <X size={14} />
-            </button>
-          </div>
-
-          {/* Project Picker */}
-          <div>
-            <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>PROJECT</label>
-            <select
-              value={selectedProjectId}
-              onChange={(e) => setSelectedProjectId(e.target.value)}
-              style={{
-                width: "100%", fontSize: 12, padding: "7px 10px", borderRadius: 8,
-                border: "1px solid #E7E5E4", background: "#FAFAF9", outline: "none",
-                color: "#1C1917"
-              }}
-            >
-              <option value="">Select Project...</option>
-              {projects.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-              <option value="custom">Custom Project...</option>
-            </select>
-            {selectedProjectId === "custom" && (
-              <input
-                type="text"
-                placeholder="Custom project name..."
-                value={customProjectName}
-                onChange={(e) => setCustomProjectName(e.target.value)}
+              <button
                 style={{
-                  ...inputStyle, marginTop: 6, fontSize: 12, padding: "7px 10px"
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  color: "#78716C"
                 }}
-              />
-            )}
+              >
+                {meetingsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.8, color: "#1C1917" }}>
+                Meetings
+              </span>
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: "1px 6px",
+                  borderRadius: 10,
+                  background: "#EFF6FF",
+                  color: "#2563EB"
+                }}
+              >
+                {dateScopedMeetings.length}
+              </span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* Meeting Status Filter Dropdown */}
+              <select
+                value={meetingFilter}
+                onChange={(e) => setMeetingFilter(e.target.value as any)}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "2px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #E7E5E4",
+                  background: "#fff",
+                  color: "#78716C",
+                  cursor: "pointer",
+                  outline: "none"
+                }}
+              >
+                <option value="all">All ({dateScopedMeetings.length})</option>
+                <option value="pending">Pending ({pendingMeetingsCount})</option>
+                <option value="done">Done ({doneMeetingsCount})</option>
+              </select>
+
+              {!showAddMeetingForm && (
+                <button
+                  onClick={() => {
+                    setMeetingsOpen(true);
+                    setShowAddMeetingForm(true);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#2563EB",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2
+                  }}
+                >
+                  <Plus size={12} /> Add
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Employees Picker */}
-          <div style={{ position: "relative" }} ref={empDropRef}>
-            <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>EMPLOYEES</label>
-            <button
-              type="button"
-              onClick={() => setShowEmpDropdown(!showEmpDropdown)}
-              style={{
-                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                fontSize: 12, padding: "7px 10px", borderRadius: 8, border: "1px solid #E7E5E4",
-                background: "#FAFAF9", color: "#1C1917", textAlign: "left", cursor: "pointer"
-              }}
-            >
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
-                {selectedEmployeeIds.length === 0
-                  ? "Select Employees..."
-                  : `Selected: ${selectedEmployeeIds.map(id => {
-                    const found = employees.find(e => e.id === id);
-                    return found ? found.name : "";
-                  }).filter(Boolean).join(", ")}`
-                }
-              </span>
-              <ChevronDown size={14} color="#78716C" />
-            </button>
+          {/* Meetings Content (Collapsible Dropdown Area) */}
+          {meetingsOpen && (
+            <div>
+              {/* Add Meeting Form */}
+              {showAddMeetingForm && (
+                <div style={{ ...cardStyle, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#78716C" }}>NEW MEETING</span>
+                    <button
+                      onClick={() => {
+                        setShowAddMeetingForm(false);
+                        setShowEmpDropdown(false);
+                      }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#A8A29E" }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
 
-            {showEmpDropdown && (
-              <div style={{
-                position: "absolute", bottom: "100%", left: 0, right: 0, zIndex: 100, marginBottom: 4,
-                background: "#fff", borderRadius: 8, border: "1px solid #E7E5E4",
-                boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: 150, overflowY: "auto", padding: 6
-              }}>
-                {employees.length === 0 ? (
-                  <div style={{ padding: "8px 10px", fontSize: 11, color: "#A8A29E" }}>No employees. Type custom name below.</div>
-                ) : (
-                  employees.map(emp => {
-                    const isChecked = selectedEmployeeIds.includes(emp.id);
-                    return (
-                      <label
-                        key={emp.id}
+                  {/* Project Picker */}
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>PROJECT</label>
+                    <select
+                      value={selectedProjectId}
+                      onChange={(e) => setSelectedProjectId(e.target.value)}
+                      style={{
+                        width: "100%",
+                        fontSize: 12,
+                        padding: "7px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #E7E5E4",
+                        background: "#FAFAF9",
+                        outline: "none",
+                        color: "#1C1917"
+                      }}
+                    >
+                      <option value="">Select Project...</option>
+                      {projects.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                      <option value="custom">Custom Project...</option>
+                    </select>
+                    {selectedProjectId === "custom" && (
+                      <input
+                        type="text"
+                        placeholder="Custom project name..."
+                        value={customProjectName}
+                        onChange={(e) => setCustomProjectName(e.target.value)}
+                        style={{ ...inputStyle, marginTop: 6, fontSize: 12, padding: "7px 10px" }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Employees Picker */}
+                  <div style={{ position: "relative" }} ref={empDropRef}>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>EMPLOYEES</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowEmpDropdown(!showEmpDropdown)}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        fontSize: 12,
+                        padding: "7px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #E7E5E4",
+                        background: "#FAFAF9",
+                        color: "#1C1917",
+                        textAlign: "left",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                        {selectedEmployeeIds.length === 0
+                          ? "Select Employees..."
+                          : `Selected: ${selectedEmployeeIds
+                              .map((id) => {
+                                const found = employees.find((e) => e.id === id);
+                                return found ? found.name : "";
+                              })
+                              .filter(Boolean)
+                              .join(", ")}`}
+                      </span>
+                      <ChevronDown size={14} color="#78716C" />
+                    </button>
+
+                    {showEmpDropdown && (
+                      <div
                         style={{
-                          display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
-                          borderRadius: 6, cursor: "pointer", fontSize: 12,
-                          background: isChecked ? "#F3F4F6" : "transparent",
-                          color: "#1C1917"
+                          position: "absolute",
+                          bottom: "100%",
+                          left: 0,
+                          right: 0,
+                          zIndex: 100,
+                          marginBottom: 4,
+                          background: "#fff",
+                          borderRadius: 8,
+                          border: "1px solid #E7E5E4",
+                          boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                          maxHeight: 150,
+                          overflowY: "auto",
+                          padding: 6
                         }}
                       >
+                        {employees.length === 0 ? (
+                          <div style={{ padding: "8px 10px", fontSize: 11, color: "#A8A29E" }}>No employees. Type custom name below.</div>
+                        ) : (
+                          employees.map((emp) => {
+                            const isChecked = selectedEmployeeIds.includes(emp.id);
+                            return (
+                              <label
+                                key={emp.id}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  padding: "6px 8px",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  fontSize: 12,
+                                  background: isChecked ? "#F3F4F6" : "transparent",
+                                  color: "#1C1917"
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (isChecked) {
+                                      setSelectedEmployeeIds(selectedEmployeeIds.filter((id) => id !== emp.id));
+                                    } else {
+                                      setSelectedEmployeeIds([...selectedEmployeeIds, emp.id]);
+                                    }
+                                  }}
+                                  style={{ cursor: "pointer" }}
+                                />
+                                {emp.name}
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
+
+                    <input
+                      type="text"
+                      placeholder="Or custom names (comma-separated)..."
+                      value={customEmployeeNames}
+                      onChange={(e) => setCustomEmployeeNames(e.target.value)}
+                      style={{ ...inputStyle, marginTop: 6, fontSize: 12, padding: "7px 10px" }}
+                    />
+                  </div>
+
+                  {/* Date & Time Inputs */}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>DATE</label>
+                      <div style={{ position: "relative" }}>
+                        <Calendar size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {
-                            if (isChecked) {
-                              setSelectedEmployeeIds(selectedEmployeeIds.filter(id => id !== emp.id));
-                            } else {
-                              setSelectedEmployeeIds([...selectedEmployeeIds, emp.id]);
-                            }
-                          }}
-                          style={{ cursor: "pointer" }}
+                          type="date"
+                          value={meetingDate}
+                          onChange={(e) => setMeetingDate(e.target.value)}
+                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
-                        {emp.name}
-                      </label>
+                      </div>
+                    </div>
+
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>TIME</label>
+                      <div style={{ position: "relative" }}>
+                        <Clock size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
+                        <input
+                          type="text"
+                          placeholder="e.g., 2:30 PM"
+                          value={meetingTime}
+                          onChange={(e) => setMeetingTime(e.target.value)}
+                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                    <button
+                      onClick={handleAddMeeting}
+                      style={{
+                        flex: 1,
+                        padding: "7px 0",
+                        borderRadius: 8,
+                        border: "none",
+                        background: "linear-gradient(135deg,#2563EB,#7C3AED)",
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        boxShadow: "0 2px 4px rgba(37,99,235,0.15)"
+                      }}
+                    >
+                      Save Meeting
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAddMeetingForm(false);
+                        setShowEmpDropdown(false);
+                      }}
+                      style={{
+                        padding: "7px 12px",
+                        borderRadius: 8,
+                        border: "1px solid #E7E5E4",
+                        background: "#fff",
+                        color: "#78716C",
+                        fontSize: 12,
+                        cursor: "pointer"
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Meeting Items List */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {filteredMeetings.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "18px 0", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 10 }}>
+                    <Calendar size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
+                    <p style={{ fontSize: 11, margin: 0 }}>
+                      {dateScopedMeetings.length === 0
+                        ? (dateScope === "today" ? "No meetings scheduled for today." : "No upcoming meetings.")
+                        : "No meetings match this filter."}
+                    </p>
+                  </div>
+                ) : (
+                  filteredMeetings.map((m) => {
+                    const projColor = getProjectColor(m.projectId);
+                    const statusConfig = statusColorMap[m.status] || statusColorMap.not_started;
+                    const isEditing = editingMeetingId === m.id;
+
+                    return (
+                      <div
+                        key={m.id}
+                        style={{
+                          ...cardStyle,
+                          padding: "10px 12px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          position: "relative",
+                          transition: "box-shadow 0.15s"
+                        }}
+                        onMouseEnter={(e) => {
+                          const actionBtns = e.currentTarget.querySelectorAll(".tracker-action-btn") as NodeListOf<HTMLElement>;
+                          actionBtns.forEach((b) => { b.style.opacity = "1"; });
+                        }}
+                        onMouseLeave={(e) => {
+                          const actionBtns = e.currentTarget.querySelectorAll(".tracker-action-btn") as NodeListOf<HTMLElement>;
+                          actionBtns.forEach((b) => { b.style.opacity = "0"; });
+                        }}
+                      >
+                        {isEditing ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input
+                                autoFocus
+                                value={editMeetingTitle}
+                                onChange={(e) => setEditMeetingTitle(e.target.value)}
+                                placeholder="Title / Project"
+                                style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveEditMeeting(m.id);
+                                  if (e.key === "Escape") setEditingMeetingId(null);
+                                }}
+                              />
+                              <input
+                                value={editMeetingTime}
+                                onChange={(e) => setEditMeetingTime(e.target.value)}
+                                placeholder="Time (e.g. 2:30 PM)"
+                                style={{ ...inputStyle, width: 95, fontSize: 12, padding: "5px 8px" }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveEditMeeting(m.id);
+                                  if (e.key === "Escape") setEditingMeetingId(null);
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ position: "relative", flex: 1 }}>
+                                <Calendar size={11} color="#A8A29E" style={{ position: "absolute", left: 7, top: "50%", transform: "translateY(-50%)" }} />
+                                <input
+                                  type="date"
+                                  value={editMeetingDate}
+                                  onChange={(e) => setEditMeetingDate(e.target.value)}
+                                  style={{ ...inputStyle, paddingLeft: 24, fontSize: 11, padding: "4px 8px 4px 24px" }}
+                                />
+                              </div>
+                              <button
+                                onClick={() => setEditingMeetingId(null)}
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: 11,
+                                  background: "none",
+                                  border: "1px solid #E7E5E4",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  color: "#78716C"
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleSaveEditMeeting(m.id)}
+                                style={{
+                                  padding: "4px 10px",
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  background: "#2563EB",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  cursor: "pointer"
+                                }}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0, cursor: "pointer" }}
+                              onDoubleClick={() => {
+                                setEditingMeetingId(m.id);
+                                setEditMeetingTitle(m.projectId);
+                                setEditMeetingTime(m.time);
+                                setEditMeetingDate(m.date || currentDate);
+                              }}
+                              title="Double-click to edit meeting"
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                {/* Project Tag */}
+                                <span
+                                  style={{
+                                    padding: "1.5px 6px",
+                                    borderRadius: 6,
+                                    background: projColor + "12",
+                                    color: projColor,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    textTransform: "uppercase",
+                                    letterSpacing: 0.3,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    maxWidth: 120,
+                                    flexShrink: 1
+                                  }}
+                                >
+                                  {m.projectId}
+                                </span>
+
+                                {/* Time */}
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    color: "#78716C",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 3,
+                                    whiteSpace: "nowrap",
+                                    flexShrink: 0
+                                  }}
+                                >
+                                  <Clock size={11} color="#A8A29E" style={{ flexShrink: 0 }} />
+                                  {m.time}
+                                </span>
+
+                                {/* Date Badge */}
+                                {m.date && (
+                                  <span
+                                    title={`Date: ${m.date}`}
+                                    style={{
+                                      fontSize: 10,
+                                      color: "#78716C",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3,
+                                      background: "#F5F5F4",
+                                      padding: "1px 6px",
+                                      borderRadius: 5,
+                                      fontWeight: 600,
+                                      whiteSpace: "nowrap",
+                                      flexShrink: 0
+                                    }}
+                                  >
+                                    <Calendar size={10} color="#A8A29E" style={{ flexShrink: 0 }} />
+                                    {m.date === currentDate ? "Today" : formatDateDisplay(m.date)}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Employees Avatars List */}
+                              {m.employeeIds && m.employeeIds.length > 0 && (
+                                <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}>
+                                  <div style={{ display: "flex", alignItems: "center" }}>
+                                    {m.employeeIds.slice(0, 3).map((empName: string, i: number) => {
+                                      const avatarBg = getAvatarColor(empName);
+                                      return (
+                                        <div
+                                          key={i}
+                                          title={empName}
+                                          style={{
+                                            width: 19,
+                                            height: 19,
+                                            borderRadius: "50%",
+                                            background: avatarBg,
+                                            border: "1.5px solid #fff",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            color: "#fff",
+                                            fontSize: 8.5,
+                                            fontWeight: 700,
+                                            marginLeft: i > 0 ? -5 : 0,
+                                            zIndex: 10 - i,
+                                            flexShrink: 0
+                                          }}
+                                        >
+                                          {initials(empName)}
+                                        </div>
+                                      );
+                                    })}
+                                    {m.employeeIds.length > 3 && (
+                                      <div
+                                        title={m.employeeIds.slice(3).join(", ")}
+                                        style={{
+                                          width: 19,
+                                          height: 19,
+                                          borderRadius: "50%",
+                                          background: "#E7E5E4",
+                                          border: "1.5px solid #fff",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          color: "#78716C",
+                                          fontSize: 8.5,
+                                          fontWeight: 700,
+                                          marginLeft: -5,
+                                          zIndex: 0,
+                                          flexShrink: 0
+                                        }}
+                                      >
+                                        +{m.employeeIds.length - 3}
+                                      </div>
+                                    )}
+                                  </div>
+                                  {m.employeeIds.length === 1 && (
+                                    <span style={{ fontSize: 11, color: "#78716C", marginLeft: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {m.employeeIds[0]}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action Buttons & Status Cycle */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                              <button
+                                onClick={() => {
+                                  setEditingMeetingId(m.id);
+                                  setEditMeetingTitle(m.projectId);
+                                  setEditMeetingTime(m.time);
+                                  setEditMeetingDate(m.date || currentDate);
+                                }}
+                                className="tracker-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#78716C",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 3,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s"
+                                }}
+                                title="Edit meeting"
+                              >
+                                <Pencil size={12} />
+                              </button>
+
+                              <button
+                                onClick={() => onDeleteMeeting(m.id)}
+                                className="tracker-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#EF4444",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 3,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s"
+                                }}
+                                title="Delete meeting"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+
+                              <button
+                                onClick={() => onCycleMeetingStatus(m.id)}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  width: 22,
+                                  height: 22,
+                                  borderRadius: "50%",
+                                  background: statusConfig.bg,
+                                  border: `1.5px solid ${statusConfig.border}`,
+                                  cursor: "pointer",
+                                  padding: 0,
+                                  transition: "all 0.15s"
+                                }}
+                                title={`Status: ${m.status.replace("_", " ")} (Click to change)`}
+                              >
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: statusConfig.dot }} />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     );
                   })
                 )}
               </div>
-            )}
-
-            <input
-              type="text"
-              placeholder="Or custom names (comma-separated)..."
-              value={customEmployeeNames}
-              onChange={(e) => setCustomEmployeeNames(e.target.value)}
-              style={{
-                ...inputStyle, marginTop: 6, fontSize: 12, padding: "7px 10px"
-              }}
-            />
-          </div>
-
-          {/* Time Input */}
-          <div>
-            <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>TIME</label>
-            <div style={{ position: "relative" }}>
-              <Clock size={13} color="#A8A29E" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
-              <input
-                type="text"
-                placeholder="e.g., 10:30 AM or 14:00"
-                value={meetingTime}
-                onChange={(e) => setMeetingTime(e.target.value)}
-                style={{
-                  ...inputStyle, paddingLeft: 30, fontSize: 12, paddingTop: 7, paddingBottom: 7
-                }}
-              />
             </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-            <button
-              onClick={handleAdd}
-              style={{
-                flex: 1, padding: "7px 0", borderRadius: 8, border: "none",
-                background: "linear-gradient(135deg,#2563EB,#7C3AED)", color: "#fff",
-                fontSize: 12, fontWeight: 700, cursor: "pointer",
-                boxShadow: "0 2px 4px rgba(37,99,235,0.15)"
-              }}
-            >
-              Save Meeting
-            </button>
-            <button
-              onClick={() => { setShowAddForm(false); setShowEmpDropdown(false); }}
-              style={{
-                padding: "7px 12px", borderRadius: 8, border: "1px solid #E7E5E4",
-                background: "#fff", color: "#78716C", fontSize: 12, cursor: "pointer"
-              }}
-            >
-              Cancel
-            </button>
-          </div>
+          )}
         </div>
       )}
 
-      {/* Meeting list */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {meetings.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 12 }}>
-            <Calendar size={20} style={{ margin: "0 auto 6px", opacity: 0.4 }} />
-            <p style={{ fontSize: 11 }}>No meetings scheduled for today.</p>
-          </div>
-        ) : (
-          meetings.map(m => {
-            const projColor = getProjectColor(m.projectId);
-            const statusConfig = statusColorMap[m.status] || statusColorMap.not_started;
-            const isEditing = editingMeetingId === m.id;
-
-            return (
-              <div
-                key={m.id}
+      {/* ══════════════════════════════════════════
+          CATEGORY 2: EVENTS (WITH DROPDOWNS)
+         ══════════════════════════════════════════ */}
+      {showEventsSection && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: showMeetingsSection ? 8 : 0 }}>
+          {/* Header Row */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              paddingBottom: 4,
+              borderBottom: "1px solid #F5F5F4"
+            }}
+          >
+            <div
+              onClick={() => setEventsOpen(!eventsOpen)}
+              style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+              title="Click dropdown chevron to toggle events"
+            >
+              <button
                 style={{
-                  ...cardStyle,
-                  padding: "10px 12px",
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  position: "relative",
-                  transition: "box-shadow 0.15s"
-                }}
-                onMouseEnter={(e) => {
-                  const actionBtns = e.currentTarget.querySelectorAll(".meeting-action-btn") as NodeListOf<HTMLElement>;
-                  actionBtns.forEach((b) => { b.style.opacity = "1"; });
-                }}
-                onMouseLeave={(e) => {
-                  const actionBtns = e.currentTarget.querySelectorAll(".meeting-action-btn") as NodeListOf<HTMLElement>;
-                  actionBtns.forEach((b) => { b.style.opacity = "0"; });
+                  color: "#78716C"
                 }}
               >
-                {isEditing ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        autoFocus
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        placeholder="Title / Project"
-                        style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleSaveEdit(m.id);
-                          if (e.key === "Escape") setEditingMeetingId(null);
-                        }}
-                      />
-                      <input
-                        value={editTime}
-                        onChange={(e) => setEditTime(e.target.value)}
-                        placeholder="Time (e.g. 2:30 PM, @230)"
-                        style={{ ...inputStyle, width: 105, fontSize: 12, padding: "5px 8px" }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleSaveEdit(m.id);
-                          if (e.key === "Escape") setEditingMeetingId(null);
-                        }}
-                      />
+                {eventsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+              <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.8, color: "#1C1917" }}>
+                Events
+              </span>
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: "1px 6px",
+                  borderRadius: 10,
+                  background: "#F5F3FF",
+                  color: "#7C3AED"
+                }}
+              >
+                {dateScopedEvents.length}
+              </span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* Event Subcategory Dropdown */}
+              <select
+                value={effectiveEventFilter}
+                onChange={(e) => setEventFilter(e.target.value as any)}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "2px 6px",
+                  borderRadius: 6,
+                  border: "1px solid #E7E5E4",
+                  background: "#fff",
+                  color: "#78716C",
+                  cursor: "pointer",
+                  outline: "none"
+                }}
+              >
+                <option value="all">All Events ({dateScopedEvents.length})</option>
+                <option value="ours">Ours ({oursEventsCount})</option>
+                <option value="imp">Imp ({impEventsCount})</option>
+                <option value="recurring">Re-occurring ({recurringEventsCount})</option>
+              </select>
+
+              {!showAddEventForm && (
+                <button
+                  onClick={() => {
+                    setEventsOpen(true);
+                    setShowAddEventForm(true);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#7C3AED",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2
+                  }}
+                >
+                  <Plus size={12} /> Add
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Events Content (Collapsible Dropdown Area) */}
+          {eventsOpen && (
+            <div>
+              {/* Quick Subcategory Pills Toggle */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+                <button
+                  onClick={() => {
+                    setEventFilter("all");
+                    if (dateScope !== "all" && events.length > dateScopedEvents.length) {
+                      setDateScope("all");
+                    }
+                  }}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 12,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: effectiveEventFilter === "all" ? "1px solid #7C3AED" : "1px solid #E7E5E4",
+                    background: effectiveEventFilter === "all" ? "#F5F3FF" : "#fff",
+                    color: effectiveEventFilter === "all" ? "#7C3AED" : "#78716C"
+                  }}
+                >
+                  All ({dateScope === "all" ? events.length : dateScopedEvents.length})
+                </button>
+                <button
+                  onClick={() => setEventFilter("ours")}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 12,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: effectiveEventFilter === "ours" ? "1px solid #6366F1" : "1px solid #E7E5E4",
+                    background: effectiveEventFilter === "ours" ? "#EEF2FF" : "#fff",
+                    color: effectiveEventFilter === "ours" ? "#4F46E5" : "#78716C"
+                  }}
+                >
+                  Ours ({oursEventsCount})
+                </button>
+                <button
+                  onClick={() => setEventFilter("imp")}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 12,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: effectiveEventFilter === "imp" ? "1px solid #F59E0B" : "1px solid #E7E5E4",
+                    background: effectiveEventFilter === "imp" ? "#FEF3C7" : "#fff",
+                    color: effectiveEventFilter === "imp" ? "#D97706" : "#78716C"
+                  }}
+                >
+                  ★ Imp ({impEventsCount})
+                </button>
+              </div>
+
+              {/* Add Event Form */}
+              {showAddEventForm && (
+                <div style={{ ...cardStyle, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#78716C" }}>NEW EVENT</span>
+                    <button
+                      onClick={() => setShowAddEventForm(false)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#A8A29E" }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Title */}
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>EVENT TITLE</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Masterclass, Luma Meetup, Demo..."
+                      value={eventTitle}
+                      onChange={(e) => setEventTitle(e.target.value)}
+                      style={{ ...inputStyle, fontSize: 12, padding: "7px 10px" }}
+                    />
+                  </div>
+
+                  {/* Category Dropdown (Ours | Imp) */}
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>CATEGORY</label>
+                    <select
+                      value={eventCategory}
+                      onChange={(e) => setEventCategory(e.target.value as EventCategory)}
+                      style={{
+                        width: "100%",
+                        fontSize: 12,
+                        padding: "7px 10px",
+                        borderRadius: 8,
+                        border: "1px solid #E7E5E4",
+                        background: "#FAFAF9",
+                        outline: "none",
+                        color: "#1C1917",
+                        fontWeight: 600
+                      }}
+                    >
+                      <option value="Ours">Ours (Our Event / Hosted)</option>
+                      <option value="Imp">Imp (Important / External Event)</option>
+                    </select>
+                  </div>
+
+                  {/* Date & Recurrence Inputs */}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>DATE</label>
+                      <div style={{ position: "relative" }}>
+                        <Calendar size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
+                        <input
+                          type="date"
+                          value={eventDate}
+                          onChange={(e) => setEventDate(e.target.value)}
+                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                        />
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                      <button
-                        onClick={() => setEditingMeetingId(null)}
+
+                    <div style={{ flex: 1.2 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>
+                        RECURRENCE
+                      </label>
+                      <select
+                        value={eventRecurrence}
+                        onChange={(e) => setEventRecurrence(e.target.value as EventRecurrence)}
                         style={{
-                          padding: "3px 8px", fontSize: 11, background: "none",
-                          border: "1px solid #E7E5E4", borderRadius: 6, cursor: "pointer", color: "#78716C"
+                          width: "100%",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: "7px 8px",
+                          borderRadius: 8,
+                          border: "1px solid #E7E5E4",
+                          background: "#FAFAF9",
+                          outline: "none",
+                          color: "#1C1917"
                         }}
                       >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => handleSaveEdit(m.id)}
-                        style={{
-                          padding: "3px 10px", fontSize: 11, fontWeight: 600,
-                          background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer"
-                        }}
-                      >
-                        Save
-                      </button>
+                        <option value="one_time">One-time</option>
+                        <option value="weekly">
+                          {eventDate ? `Re-occurring (Every ${getDayName(eventDate)})` : "Re-occurring (Weekly)"}
+                        </option>
+                      </select>
                     </div>
                   </div>
-                ) : (
-                  <>
-                    <div
-                      style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0, cursor: "pointer" }}
-                      onDoubleClick={() => {
-                        setEditingMeetingId(m.id);
-                        setEditTitle(m.projectId);
-                        setEditTime(m.time);
-                      }}
-                      title="Double-click to edit meeting"
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {/* Project Tag */}
-                        <span
-                          style={{
-                            padding: "1.5px 6px",
-                            borderRadius: 6,
-                            background: projColor + "12",
-                            color: projColor,
-                            fontSize: 10,
-                            fontWeight: 700,
-                            textTransform: "uppercase",
-                            letterSpacing: 0.3,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            maxWidth: 150
-                          }}
-                        >
-                          {m.projectId}
-                        </span>
 
-                        {/* Time */}
-                        <span style={{ fontSize: 11, color: "#78716C", display: "inline-flex", alignItems: "center", gap: 3 }}>
-                          <Clock size={11} color="#A8A29E" />
-                          {m.time}
-                        </span>
+                  {/* Time & Location Inputs */}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>TIME (OPTIONAL)</label>
+                      <div style={{ position: "relative" }}>
+                        <Clock size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
+                        <input
+                          type="text"
+                          placeholder="e.g. 7:00 PM"
+                          value={eventTime}
+                          onChange={(e) => setEventTime(e.target.value)}
+                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                        />
                       </div>
+                    </div>
 
-                      {/* Employees Avatars List */}
-                      <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}>
-                        <div style={{ display: "flex", alignItems: "center" }}>
-                          {m.employeeIds.slice(0, 3).map((empName: string, i: number) => {
-                            const avatarBg = getAvatarColor(empName);
-                            return (
-                              <div
-                                key={i}
-                                title={empName}
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>PLATFORM / LOCATION</label>
+                      <div style={{ position: "relative" }}>
+                        <MapPin size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
+                        <input
+                          type="text"
+                          placeholder="e.g. Luma, Zoom"
+                          value={eventLocation}
+                          onChange={(e) => setEventLocation(e.target.value)}
+                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                    <button
+                      onClick={handleAddEvent}
+                      style={{
+                        flex: 1,
+                        padding: "7px 0",
+                        borderRadius: 8,
+                        border: "none",
+                        background: "linear-gradient(135deg,#7C3AED,#6366F1)",
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        boxShadow: "0 2px 4px rgba(124,58,237,0.15)"
+                      }}
+                    >
+                      Save Event
+                    </button>
+                    <button
+                      onClick={() => setShowAddEventForm(false)}
+                      style={{
+                        padding: "7px 12px",
+                        borderRadius: 8,
+                        border: "1px solid #E7E5E4",
+                        background: "#fff",
+                        color: "#78716C",
+                        fontSize: 12,
+                        cursor: "pointer"
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Event Items List */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {filteredEvents.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "18px 0", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 10 }}>
+                    <Calendar size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
+                    <p style={{ fontSize: 11, margin: 0 }}>
+                      {dateScopedEvents.length === 0
+                        ? (dateScope === "today" ? "No events scheduled for today." : "No upcoming events.")
+                        : "No events in this category."}
+                    </p>
+                    {events.length > 0 && dateScope === "today" && (
+                      <button
+                        onClick={() => setDateScope("all")}
+                        style={{
+                          marginTop: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "#7C3AED",
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                          textDecoration: "underline",
+                        }}
+                      >
+                        View all {events.length} events across all dates
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  filteredEvents.map((evt) => {
+                    const statusConfig = statusColorMap[evt.status] || statusColorMap.not_started;
+                    const isEditing = editingEventId === evt.id;
+
+                    return (
+                      <div
+                        key={evt.id}
+                        style={{
+                          ...cardStyle,
+                          padding: "10px 12px",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          position: "relative",
+                          transition: "box-shadow 0.15s"
+                        }}
+                        onMouseEnter={(e) => {
+                          const actionBtns = e.currentTarget.querySelectorAll(".tracker-action-btn") as NodeListOf<HTMLElement>;
+                          actionBtns.forEach((b) => { b.style.opacity = "1"; });
+                        }}
+                        onMouseLeave={(e) => {
+                          const actionBtns = e.currentTarget.querySelectorAll(".tracker-action-btn") as NodeListOf<HTMLElement>;
+                          actionBtns.forEach((b) => { b.style.opacity = "0"; });
+                        }}
+                      >
+                        {isEditing ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input
+                                autoFocus
+                                value={editEventTitle}
+                                onChange={(e) => setEditEventTitle(e.target.value)}
+                                placeholder="Event Title"
+                                style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveEditEvent(evt.id);
+                                  if (e.key === "Escape") setEditingEventId(null);
+                                }}
+                              />
+                              <select
+                                value={editEventCategory}
+                                onChange={(e) => setEditEventCategory(e.target.value as EventCategory)}
                                 style={{
-                                  width: 20,
-                                  height: 20,
-                                  borderRadius: "50%",
-                                  background: avatarBg,
-                                  border: "1.5px solid #fff",
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  padding: "5px 6px",
+                                  borderRadius: 6,
+                                  border: "1px solid #E7E5E4",
+                                  background: "#FAFAF9",
+                                  color: "#1C1917"
+                                }}
+                              >
+                                <option value="Ours">Ours</option>
+                                <option value="Imp">Imp</option>
+                              </select>
+                            </div>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input
+                                type="date"
+                                value={editEventDate}
+                                onChange={(e) => setEditEventDate(e.target.value)}
+                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 6px" }}
+                              />
+                              <select
+                                value={editEventRecurrence}
+                                onChange={(e) => setEditEventRecurrence(e.target.value as EventRecurrence)}
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  padding: "4px 6px",
+                                  borderRadius: 6,
+                                  border: "1px solid #E7E5E4",
+                                  background: "#FAFAF9",
+                                  color: "#1C1917",
+                                  flex: 1.2
+                                }}
+                              >
+                                <option value="one_time">One-time</option>
+                                <option value="weekly">
+                                  {editEventDate ? `Re-occurring (${getDayName(editEventDate)})` : "Re-occurring"}
+                                </option>
+                              </select>
+                            </div>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input
+                                value={editEventTime}
+                                onChange={(e) => setEditEventTime(e.target.value)}
+                                placeholder="Time (e.g. 7:00 PM)"
+                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }}
+                              />
+                              <input
+                                value={editEventLocation}
+                                onChange={(e) => setEditEventLocation(e.target.value)}
+                                placeholder="Location/Platform (e.g. Luma)"
+                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                              <button
+                                onClick={() => setEditingEventId(null)}
+                                style={{
+                                  padding: "3px 8px",
+                                  fontSize: 11,
+                                  background: "none",
+                                  border: "1px solid #E7E5E4",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  color: "#78716C"
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleSaveEditEvent(evt.id)}
+                                style={{
+                                  padding: "3px 10px",
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  background: "#7C3AED",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  cursor: "pointer"
+                                }}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0, cursor: "pointer" }}
+                              onDoubleClick={() => {
+                                setEditingEventId(evt.id);
+                                setEditEventTitle(evt.title);
+                                setEditEventCategory(evt.category);
+                                setEditEventTime(evt.time || "");
+                                setEditEventLocation(evt.location || "");
+                                setEditEventDate(evt.date || currentDate);
+                                setEditEventRecurrence(evt.recurrence || "one_time");
+                              }}
+                              title="Double-click to edit event"
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                                {/* Category Badge */}
+                                {evt.category === "Ours" ? (
+                                  <span
+                                    style={{
+                                      padding: "1.5px 7px",
+                                      borderRadius: 6,
+                                      background: "#EEF2FF",
+                                      color: "#4F46E5",
+                                      border: "1px solid #C7D2FE",
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                      letterSpacing: 0.5,
+                                      textTransform: "uppercase"
+                                    }}
+                                  >
+                                    OURS
+                                  </span>
+                                ) : (
+                                  <span
+                                    style={{
+                                      padding: "1.5px 7px",
+                                      borderRadius: 6,
+                                      background: "#FEF3C7",
+                                      color: "#D97706",
+                                      border: "1px solid #FDE68A",
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                      letterSpacing: 0.5,
+                                      textTransform: "uppercase",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3
+                                    }}
+                                  >
+                                    <Star size={9} fill="#D97706" color="#D97706" /> IMP
+                                  </span>
+                                )}
+
+                                {/* Recurrence Badge */}
+                                {evt.recurrence === "weekly" ? (
+                                  <span
+                                    title={`Re-occurring every ${typeof evt.recurringDay === "number" ? DAYS_OF_WEEK[evt.recurringDay] : "week"}`}
+                                    style={{
+                                      padding: "1.5px 6px",
+                                      borderRadius: 6,
+                                      background: "#F0FDF4",
+                                      color: "#16A34A",
+                                      border: "1px solid #BBF7D0",
+                                      fontSize: 9.5,
+                                      fontWeight: 700,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3,
+                                      whiteSpace: "nowrap"
+                                    }}
+                                  >
+                                    <Repeat size={9} />
+                                    {typeof evt.recurringDay === "number" ? `Every ${DAYS_OF_WEEK_SHORT[evt.recurringDay]}` : "Weekly"}
+                                  </span>
+                                ) : (
+                                  <span
+                                    title="One-time event"
+                                    style={{
+                                      padding: "1px 5px",
+                                      borderRadius: 4,
+                                      background: "#F5F5F4",
+                                      color: "#A8A29E",
+                                      fontSize: 9,
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    1-time
+                                  </span>
+                                )}
+
+                                {/* Date Badge */}
+                                {evt.date && (
+                                  <span
+                                    title={`Date: ${evt.date}`}
+                                    style={{
+                                      fontSize: 10,
+                                      color: "#78716C",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3,
+                                      background: "#F5F5F4",
+                                      padding: "1px 5px",
+                                      borderRadius: 4,
+                                      fontWeight: 600,
+                                      whiteSpace: "nowrap"
+                                    }}
+                                  >
+                                    <Calendar size={10} color="#A8A29E" />
+                                    {evt.date === currentDate ? "Today" : formatDateDisplay(evt.date)}
+                                  </span>
+                                )}
+
+                                {/* Event Title */}
+                                <span
+                                  style={{
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    color: evt.status === "done" ? "#A8A29E" : "#1C1917",
+                                    textDecoration: evt.status === "done" ? "line-through" : "none",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap"
+                                  }}
+                                >
+                                  {evt.title}
+                                </span>
+                              </div>
+
+                              {/* Details: Time and Location */}
+                              {(evt.time || evt.location) && (
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#78716C", marginTop: 2, flexWrap: "nowrap" }}>
+                                  {evt.time && (
+                                    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, whiteSpace: "nowrap", flexShrink: 0 }}>
+                                      <Clock size={11} color="#A8A29E" style={{ flexShrink: 0 }} />
+                                      {evt.time}
+                                    </span>
+                                  )}
+                                  {evt.location && (
+                                    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                      <MapPin size={11} color="#A8A29E" style={{ flexShrink: 0 }} />
+                                      {evt.location}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action Buttons & Status Cycle */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                              <button
+                                onClick={() => {
+                                  setEditingEventId(evt.id);
+                                  setEditEventTitle(evt.title);
+                                  setEditEventCategory(evt.category);
+                                  setEditEventTime(evt.time || "");
+                                  setEditEventLocation(evt.location || "");
+                                  setEditEventDate(evt.date || currentDate);
+                                  setEditEventRecurrence(evt.recurrence || "one_time");
+                                }}
+                                className="tracker-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#78716C",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 3,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s"
+                                }}
+                                title="Edit event"
+                              >
+                                <Pencil size={12} />
+                              </button>
+
+                              <button
+                                onClick={() => onDeleteEvent(evt.id)}
+                                className="tracker-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#EF4444",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 3,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s"
+                                }}
+                                title="Delete event"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+
+                              <button
+                                onClick={() => onCycleEventStatus(evt.id)}
+                                style={{
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  color: "#fff",
-                                  fontSize: 9,
-                                  fontWeight: 700,
-                                  marginLeft: i > 0 ? -5 : 0,
-                                  zIndex: 10 - i,
-                                  flexShrink: 0
+                                  width: 22,
+                                  height: 22,
+                                  borderRadius: "50%",
+                                  background: statusConfig.bg,
+                                  border: `1.5px solid ${statusConfig.border}`,
+                                  cursor: "pointer",
+                                  padding: 0,
+                                  transition: "all 0.15s"
                                 }}
+                                title={`Status: ${evt.status.replace("_", " ")} (Click to change)`}
                               >
-                                {initials(empName)}
-                              </div>
-                            );
-                          })}
-                          {m.employeeIds.length > 3 && (
-                            <div
-                              title={m.employeeIds.slice(3).join(", ")}
-                              style={{
-                                width: 20,
-                                height: 20,
-                                borderRadius: "50%",
-                                background: "#E7E5E4",
-                                border: "1.5px solid #fff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                color: "#78716C",
-                                fontSize: 9,
-                                fontWeight: 700,
-                                marginLeft: -5,
-                                zIndex: 0,
-                                flexShrink: 0
-                              }}
-                            >
-                              +{m.employeeIds.length - 3}
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: statusConfig.dot }} />
+                              </button>
                             </div>
-                          )}
-                        </div>
-                        {/* Compact employee name labels if only 1 */}
-                        {m.employeeIds.length === 1 && (
-                          <span style={{ fontSize: 11, color: "#78716C", marginLeft: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {m.employeeIds[0]}
-                          </span>
+                          </>
                         )}
                       </div>
-                    </div>
-
-                    {/* Status indicator and action buttons */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                      {/* Edit Button (visible on hover) */}
-                      <button
-                        onClick={() => {
-                          setEditingMeetingId(m.id);
-                          setEditTitle(m.projectId);
-                          setEditTime(m.time);
-                        }}
-                        className="meeting-action-btn"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: "#78716C",
-                          opacity: 0,
-                          cursor: "pointer",
-                          padding: 4,
-                          borderRadius: 4,
-                          transition: "opacity 0.1s"
-                        }}
-                        title="Edit meeting"
-                      >
-                        <Pencil size={13} />
-                      </button>
-
-                      {/* Delete Button (visible on hover) */}
-                      <button
-                        onClick={() => onDeleteMeeting(m.id)}
-                        className="meeting-action-btn"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: "#EF4444",
-                          opacity: 0,
-                          cursor: "pointer",
-                          padding: 4,
-                          borderRadius: 4,
-                          transition: "opacity 0.1s"
-                        }}
-                        title="Delete meeting"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-
-                      {/* Status Circle */}
-                      <button
-                        onClick={() => onCycleStatus(m.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          width: 24,
-                          height: 24,
-                          borderRadius: "50%",
-                          background: statusConfig.bg,
-                          border: `1.5px solid ${statusConfig.border}`,
-                          cursor: "pointer",
-                          padding: 0,
-                          transition: "all 0.15s"
-                        }}
-                        title={`Status: ${m.status.replace("_", " ")} (Click to change)`}
-                      >
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusConfig.dot }} />
-                      </button>
-                    </div>
-                  </>
+                    );
+                  })
                 )}
               </div>
-            );
-          })
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
+        </>
+      )}
     </div>
   );
 }
@@ -2280,6 +4146,7 @@ function EmployeeTasksSection({
   managerNotes,
   cardStyle,
 }: EmployeeTasksSectionProps) {
+  const [sectionOpen, setSectionOpen] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const toggleExpand = (id: string) => {
@@ -2360,62 +4227,716 @@ function EmployeeTasksSection({
 
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>
-          Employee Tasks {activeEmployees.length > 0 && <span style={{ color: "#8B5CF6", fontWeight: 700 }}>({activeEmployees.length})</span>}
-        </h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: sectionOpen ? 16 : 0 }}>
+        <div
+          onClick={() => setSectionOpen(!sectionOpen)}
+          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+          title="Click dropdown chevron to toggle Employee Tasks"
+        >
+          <button
+            type="button"
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              color: "#78716C",
+            }}
+          >
+            {sectionOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <Users size={13} color="#78716C" />
+          <h3 style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1.2, color: "#78716C", margin: 0 }}>
+            Employee Tasks
+          </h3>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: "1px 6px",
+              borderRadius: 10,
+              background: "#F5F3FF",
+              color: "#8B5CF6",
+            }}
+          >
+            {activeEmployees.length}
+          </span>
+        </div>
       </div>
 
-      {activeEmployees.length === 0 ? (
-        <div style={{ ...cardStyle, padding: "28px 16px", textAlign: "center", color: "#A8A29E" }}>
-          <Users size={24} style={{ margin: "0 auto 8px", opacity: 0.4 }} />
-          <div style={{ fontSize: 12, fontWeight: 500 }}>No employee tasks assigned today.</div>
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {activeEmployees.map(({ emp, tasks }) => {
-            const isExpanded = !!expanded[emp.id];
+      {sectionOpen && (
+        <>
+          {activeEmployees.length === 0 ? (
+            <div style={{ ...cardStyle, padding: "28px 16px", textAlign: "center", color: "#A8A29E" }}>
+              <Users size={24} style={{ margin: "0 auto 8px", opacity: 0.4 }} />
+              <div style={{ fontSize: 12, fontWeight: 500 }}>No employee tasks assigned today.</div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {activeEmployees.map(({ emp, tasks }) => {
+                const isExpanded = !!expanded[emp.id];
 
-            return (
-              <div key={emp.id} style={{ ...cardStyle, overflow: "hidden" }}>
-                {/* Employee Row Header */}
+                return (
+                  <div key={emp.id} style={{ ...cardStyle, overflow: "hidden" }}>
+                    {/* Employee Row Header */}
+                    <button
+                      onClick={() => toggleExpand(emp.id)}
+                      style={{
+                        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                        padding: "10px 12px", background: "none", border: "none", cursor: "pointer",
+                        textAlign: "left", fontSize: 13, fontWeight: 600, color: "#1C1917"
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                        <span style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", display: "inline-flex" }}>
+                          <ChevronDown size={14} color="#78716C" />
+                        </span>
+                        <span>{emp.name}</span>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#8B5CF6", background: "#F5F3FF", padding: "2px 8px", borderRadius: 12 }}>
+                        {tasks.length} task{tasks.length !== 1 ? "s" : ""}
+                      </span>
+                    </button>
+
+                    {/* Collapsible Tasks List */}
+                    {isExpanded && (
+                      <div style={{ borderTop: "1px solid #F0EEEC", background: "#FAFAF9", padding: "8px 12px" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {tasks.map(t => (
+                            <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, padding: "2px 0" }}>
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColorMap[t.status as Status] || "#D1D5DB", marginTop: 6, flexShrink: 0 }} />
+                              <span style={{ color: t.status === "done" ? "#A8A29E" : "#44403C", textDecoration: t.status === "done" ? "line-through" : "none", wordBreak: "break-word" }}>
+                                {t.text}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─── Goals Overview Section Component (Displayed After Tracker) ─── */
+interface GoalsOverviewSectionProps {
+  goals: Goal[];
+  cardStyle: React.CSSProperties;
+  inputStyle: React.CSSProperties;
+  draggedGoal: string | null;
+  setDraggedGoal: (id: string | null) => void;
+  onNavigateToGoals: () => void;
+  onAddGoal: (goal: Omit<Goal, "id">) => void;
+  onUpdateGoal: (id: string, updates: Partial<Goal>) => void;
+  onDeleteGoal: (id: string) => void;
+  onReorderGoals: (newGoals: Goal[]) => void;
+}
+
+const GOAL_COLORS = ["#E1306C", "#2563EB", "#16A34A", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#EF4444"];
+
+function MiniGoalRing({ pct, color, size = 36 }: { pct: number; color: string; size?: number }) {
+  const visiblePct = pct > 0 ? Math.max(1, pct) : 0;
+  const strokeWidth = 3.5;
+  const r = (size - strokeWidth * 2) / 2;
+  const c = 2 * Math.PI * r;
+  const off = c - (visiblePct / 100) * c;
+  return (
+    <div style={{ position: "relative", width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)", position: "absolute", top: 0, left: 0 }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#F5F5F4" strokeWidth={strokeWidth} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={strokeWidth}
+          strokeDasharray={c}
+          strokeDashoffset={off}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 0.6s ease-out" }}
+        />
+      </svg>
+      <span style={{ fontSize: 9, fontWeight: 800, color: "#1C1917" }}>{pct}%</span>
+    </div>
+  );
+}
+
+function GoalsOverviewSection({
+  goals,
+  cardStyle,
+  inputStyle,
+  draggedGoal,
+  setDraggedGoal,
+  onNavigateToGoals,
+  onAddGoal,
+  onUpdateGoal,
+  onDeleteGoal,
+  onReorderGoals,
+}: GoalsOverviewSectionProps) {
+  const [goalsOpen, setGoalsOpen] = useState(true);
+  const [filter, setFilter] = useState<"all" | "in_progress" | "completed">("all");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [form, setForm] = useState({ title: "", target: "", current: "", unit: "", color: GOAL_COLORS[0] });
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editCurrent, setEditCurrent] = useState("");
+  const [editTarget, setEditTarget] = useState("");
+
+  const handleCreate = () => {
+    if (!form.title.trim() || !form.target) return;
+    onAddGoal({
+      title: form.title.trim(),
+      target: +form.target || 1,
+      current: +(form.current || 0),
+      unit: form.unit.trim() || "units",
+      color: form.color || GOAL_COLORS[0],
+    });
+    setForm({ title: "", target: "", current: "", unit: "", color: GOAL_COLORS[0] });
+    setShowAddForm(false);
+  };
+
+  const handleSaveEdit = (id: string) => {
+    if (!editTitle.trim()) return;
+    onUpdateGoal(id, {
+      title: editTitle.trim(),
+      current: +editCurrent || 0,
+      target: +editTarget || 1,
+    });
+    setEditingId(null);
+  };
+
+  const completedCount = goals.filter((g) => g.current >= g.target).length;
+  const inProgressCount = goals.length - completedCount;
+
+  const filteredGoals = goals.filter((g) => {
+    if (filter === "completed") return g.current >= g.target;
+    if (filter === "in_progress") return g.current < g.target;
+    return true;
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, borderTop: "1px solid #E7E5E4", paddingTop: 18, marginTop: 16 }}>
+      {/* ── Top Header Toolbar matching Tracker ── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: goalsOpen ? 4 : 0,
+        }}
+      >
+        <div
+          onClick={() => setGoalsOpen(!goalsOpen)}
+          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+          title="Click dropdown chevron to toggle Goals"
+        >
+          <button
+            type="button"
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              color: "#78716C",
+            }}
+          >
+            {goalsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <Target size={13} color="#2563EB" />
+          <h3
+            style={{
+              fontSize: 10,
+              fontWeight: 800,
+              textTransform: "uppercase",
+              letterSpacing: 1.2,
+              color: "#78716C",
+              margin: 0,
+            }}
+          >
+            Goals
+          </h3>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: "1px 6px",
+              borderRadius: 10,
+              background: "#EFF6FF",
+              color: "#2563EB",
+            }}
+          >
+            {goals.length}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {/* Filter Dropdown */}
+          <select
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value as any);
+              if (!goalsOpen) setGoalsOpen(true);
+            }}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 8px",
+              borderRadius: 7,
+              border: "1px solid #E7E5E4",
+              background: "#FAFAF9",
+              color: "#1C1917",
+              cursor: "pointer",
+              outline: "none",
+            }}
+          >
+            <option value="all">All ({goals.length})</option>
+            <option value="in_progress">In Progress ({inProgressCount})</option>
+            <option value="completed">Completed ({completedCount})</option>
+          </select>
+
+          {!showAddForm && (
+            <button
+              onClick={() => {
+                setGoalsOpen(true);
+                setShowAddForm(true);
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#2563EB",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 2,
+              }}
+              title="Add a new goal"
+            >
+              <Plus size={12} /> Add
+            </button>
+          )}
+
+          <button
+            onClick={onNavigateToGoals}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#78716C",
+              cursor: "pointer",
+              padding: "2px 4px",
+              display: "flex",
+              alignItems: "center",
+            }}
+            title="Open Goal Tracker page"
+          >
+            <ExternalLink size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Section Body ── */}
+      {goalsOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Quick Add Goal Form */}
+          {showAddForm && (
+            <div
+              style={{
+                ...cardStyle,
+                padding: 12,
+                background: "#FAFAF9",
+                border: "1.5px solid #DBEAFE",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#1E3A8A" }}>New Goal</span>
                 <button
-                  onClick={() => toggleExpand(emp.id)}
+                  onClick={() => setShowAddForm(false)}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#78716C", padding: 0 }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Goal Title (e.g. YouTube Subscribers)"
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }}
+              />
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <div>
+                  <label style={{ fontSize: 9.5, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 2 }}>TARGET</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 5000"
+                    value={form.target}
+                    onChange={(e) => setForm({ ...form, target: e.target.value })}
+                    style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 9.5, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 2 }}>CURRENT</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 0"
+                    value={form.current}
+                    onChange={(e) => setForm({ ...form, current: e.target.value })}
+                    style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="text"
+                    placeholder="Unit (e.g. $, followers)"
+                    value={form.unit}
+                    onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                    style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  {GOAL_COLORS.slice(0, 5).map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setForm({ ...form, color: c })}
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: "50%",
+                        background: c,
+                        border: form.color === c ? `2px solid #1C1917` : "1px solid rgba(0,0,0,0.1)",
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                <button
+                  onClick={handleCreate}
                   style={{
-                    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "10px 12px", background: "none", border: "none", cursor: "pointer",
-                    textAlign: "left", fontSize: 13, fontWeight: 600, color: "#1C1917"
+                    flex: 1,
+                    padding: "6px 0",
+                    borderRadius: 7,
+                    border: "none",
+                    background: "#2563EB",
+                    color: "#fff",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
-                    <span style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", display: "inline-flex" }}>
-                      <ChevronDown size={14} color="#78716C" />
-                    </span>
-                    <span>{emp.name}</span>
-                  </div>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#8B5CF6", background: "#F5F3FF", padding: "2px 8px", borderRadius: 12 }}>
-                    {tasks.length} task{tasks.length !== 1 ? "s" : ""}
-                  </span>
+                  Save Goal
                 </button>
-
-                {/* Collapsible Tasks List */}
-                {isExpanded && (
-                  <div style={{ borderTop: "1px solid #F0EEEC", background: "#FAFAF9", padding: "8px 12px" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {tasks.map(t => (
-                        <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, padding: "2px 0" }}>
-                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColorMap[t.status as Status] || "#D1D5DB", marginTop: 6, flexShrink: 0 }} />
-                          <span style={{ color: t.status === "done" ? "#A8A29E" : "#44403C", textDecoration: t.status === "done" ? "line-through" : "none", wordBreak: "break-word" }}>
-                            {t.text}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 7,
+                    border: "1px solid #E7E5E4",
+                    background: "#fff",
+                    color: "#78716C",
+                    fontSize: 11,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          {/* Goal Cards List */}
+          {filteredGoals.length === 0 ? (
+            <div
+              style={{
+                textAlign: "center",
+                padding: "16px 0",
+                color: "#A8A29E",
+                border: "1px dashed #E7E5E4",
+                borderRadius: 10,
+              }}
+            >
+              <Target size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
+              <p style={{ fontSize: 11, margin: 0 }}>
+                {goals.length === 0 ? "No goals created yet." : "No goals match this filter."}
+              </p>
+            </div>
+          ) : (
+            filteredGoals.map((goal) => {
+              const pct = Math.min(100, Math.round((goal.current / goal.target) * 100)) || 0;
+              const isEditing = editingId === goal.id;
+
+              return (
+                <div
+                  key={goal.id}
+                  draggable={!isEditing}
+                  onDragStart={(e) => {
+                    setDraggedGoal(goal.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedGoal && draggedGoal !== goal.id) {
+                      const newGoals = [...goals];
+                      const sIdx = newGoals.findIndex((g) => g.id === draggedGoal);
+                      const tIdx = newGoals.findIndex((g) => g.id === goal.id);
+                      if (sIdx !== -1 && tIdx !== -1) {
+                        const [rem] = newGoals.splice(sIdx, 1);
+                        newGoals.splice(tIdx, 0, rem);
+                        onReorderGoals(newGoals);
+                      }
+                    }
+                    setDraggedGoal(null);
+                  }}
+                  style={{
+                    ...cardStyle,
+                    padding: "10px 12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    position: "relative",
+                    opacity: draggedGoal === goal.id ? 0.4 : 1,
+                    cursor: isEditing ? "default" : "grab",
+                    transition: "box-shadow 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    const btns = e.currentTarget.querySelectorAll(".goal-action-btn") as NodeListOf<HTMLElement>;
+                    btns.forEach((b) => { b.style.opacity = "1"; });
+                  }}
+                  onMouseLeave={(e) => {
+                    const btns = e.currentTarget.querySelectorAll(".goal-action-btn") as NodeListOf<HTMLElement>;
+                    btns.forEach((b) => { b.style.opacity = "0"; });
+                  }}
+                >
+                  {isEditing ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <input
+                        autoFocus
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="Goal Title"
+                        style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }}
+                      />
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: 9, color: "#A8A29E" }}>Current</label>
+                          <input
+                            type="number"
+                            value={editCurrent}
+                            onChange={(e) => setEditCurrent(e.target.value)}
+                            style={{ ...inputStyle, fontSize: 11, padding: "3px 6px" }}
+                          />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: 9, color: "#A8A29E" }}>Target</label>
+                          <input
+                            type="number"
+                            value={editTarget}
+                            onChange={(e) => setEditTarget(e.target.value)}
+                            style={{ ...inputStyle, fontSize: 11, padding: "3px 6px" }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 2 }}>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          style={{
+                            padding: "3px 8px",
+                            fontSize: 10,
+                            background: "none",
+                            border: "1px solid #E7E5E4",
+                            borderRadius: 5,
+                            cursor: "pointer",
+                            color: "#78716C",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleSaveEdit(goal.id)}
+                          style={{
+                            padding: "3px 10px",
+                            fontSize: 10,
+                            fontWeight: 600,
+                            background: "#2563EB",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: 5,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Top Row: Mini Ring + Title + Target Numbers */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        {/* Mini Circular Progress Ring */}
+                        <MiniGoalRing pct={pct} color={goal.color || "#2563EB"} size={36} />
+
+                        {/* Middle Info */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                            <span
+                              onDoubleClick={() => {
+                                setEditingId(goal.id);
+                                setEditTitle(goal.title);
+                                setEditCurrent(String(goal.current));
+                                setEditTarget(String(goal.target));
+                              }}
+                              title="Double-click to edit goal"
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: "#1C1917",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {goal.title}
+                            </span>
+
+                            {/* Action Buttons (Edit, Quick +1, Delete) */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                              <button
+                                onClick={() => {
+                                  onUpdateGoal(goal.id, { current: goal.current + 1 });
+                                }}
+                                className="goal-action-btn"
+                                style={{
+                                  background: "#EFF6FF",
+                                  border: "none",
+                                  color: "#2563EB",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: "2px 5px",
+                                  borderRadius: 4,
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  transition: "opacity 0.1s",
+                                }}
+                                title="Add +1 to current"
+                              >
+                                +1
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setEditingId(goal.id);
+                                  setEditTitle(goal.title);
+                                  setEditCurrent(String(goal.current));
+                                  setEditTarget(String(goal.target));
+                                }}
+                                className="goal-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#78716C",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 2,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s",
+                                }}
+                                title="Edit goal"
+                              >
+                                <Pencil size={11} />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Delete goal "${goal.title}"?`)) {
+                                    onDeleteGoal(goal.id);
+                                  }
+                                }}
+                                className="goal-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#EF4444",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 2,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s",
+                                }}
+                                title="Delete goal"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Current / Target Numbers */}
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                            <span
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 800,
+                                color: goal.color || "#2563EB",
+                                fontFamily: "'Fraunces', serif",
+                              }}
+                            >
+                              {goal.unit === "$" ? `$${goal.current.toLocaleString()}` : goal.current.toLocaleString()}
+                            </span>
+                            <span style={{ fontSize: 10, color: "#A8A29E" }}>
+                              / {goal.unit === "$" ? `$${goal.target.toLocaleString()}` : goal.target.toLocaleString()}
+                            </span>
+                            {goal.unit && goal.unit !== "units" && goal.unit !== "$" && (
+                              <span style={{ fontSize: 9.5, color: "#78716C", fontWeight: 600, marginLeft: 2 }}>
+                                {goal.unit}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bottom Linear Progress Bar */}
+                      <div style={{ width: "100%", height: 4, borderRadius: 2, background: "#F5F5F4", overflow: "hidden" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            background: goal.color || "#2563EB",
+                            width: `${pct}%`,
+                            borderRadius: 2,
+                            transition: "width 0.5s ease",
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
     </div>
@@ -2633,7 +5154,12 @@ function DailyTodos({
   // Close subtask popover on outside click
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement | null;
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(target as Node) &&
+        !target?.closest("[data-subtask-trigger]")
+      ) {
         setOpenSubtaskPopover(null);
       }
     };
@@ -3180,13 +5706,7 @@ function DailyTodos({
                       const totalSub = hasSubtasks ? chip.subtasks!.length : 0;
                       const doneSub = hasSubtasks ? chip.subtasks!.filter((st) => st.status === "done").length : 0;
                       const doingSub = hasSubtasks ? chip.subtasks!.filter((st) => st.status === "doing").length : 0;
-                      const effectiveStatus: Status = hasSubtasks
-                        ? (chip.status === "done" || (totalSub > 0 && doneSub === totalSub)
-                            ? "done"
-                            : chip.status === "doing" || doneSub > 0 || doingSub > 0
-                              ? "doing"
-                              : "not_started")
-                        : chip.status;
+                      const effectiveStatus: Status = chip.status || "not_started";
                       const cs = chipStatusColor[effectiveStatus];
                       const isEditingThis = editingChip?.id === item.id && editingChip?.idx === idx;
                       const isOpenPopover = openSubtaskPopover?.id === item.id && openSubtaskPopover?.chipIdx === idx;
@@ -3210,6 +5730,7 @@ function DailyTodos({
                           ) : (
                             <>
                               <div
+                                data-subtask-trigger="true"
                                 onClick={() => {
                                   if (hasSubtasks) {
                                     setOpenSubtaskPopover(isOpenPopover ? null : { id: item.id, chipIdx: idx });
@@ -3257,6 +5778,7 @@ function DailyTodos({
                                   </span>
                                 ) : (
                                   <button
+                                    data-subtask-trigger="true"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setOpenSubtaskPopover(isOpenPopover ? null : { id: item.id, chipIdx: idx });
