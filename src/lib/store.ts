@@ -31,6 +31,30 @@ const DEFAULT_GOALS = [
   { id: "g4", title: "Revenue Target", target: 1000000, current: 0, unit: "$", color: "#F59E0B" },
 ];
 
+function cleanStateOfFatima(parsed: AppState): AppState {
+  if (parsed.employees) {
+    parsed.employees = parsed.employees.filter((e) => !e.name.toLowerCase().includes("fatima"));
+  }
+  if (parsed.days) {
+    for (const d of Object.values(parsed.days)) {
+      if (d.subTasks) {
+        d.subTasks = d.subTasks.map((s) => ({
+          ...s,
+          employee: s.employee && s.employee.toLowerCase().includes("fatima") ? undefined : s.employee,
+          text: s.text ? s.text.replace(/@fatima\b/gi, "").trim() : s.text,
+          chips: s.chips
+            ? s.chips.map((c) => ({
+                ...c,
+                text: c.text.replace(/@fatima\b/gi, "").trim(),
+              }))
+            : s.chips,
+        }));
+      }
+    }
+  }
+  return parsed;
+}
+
 export async function loadState(): Promise<AppState> {
   if (typeof window === "undefined") {
     const td = getToday();
@@ -68,7 +92,7 @@ export async function loadState(): Promise<AppState> {
       if (!parsed.employees) {
         parsed.employees = [];
       }
-      return parsed;
+      return cleanStateOfFatima(parsed);
     }
   } catch(err) {
     console.error("Failed to load from DB", err);
@@ -106,8 +130,9 @@ export async function loadState(): Promise<AppState> {
        if (!parsed.employees) {
          parsed.employees = [];
        }
-       saveState(parsed);
-       return parsed;
+       const cleaned = cleanStateOfFatima(parsed);
+       saveState(cleaned);
+       return cleaned;
      }
   } catch {}
 
@@ -182,7 +207,14 @@ export function getSession() {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(AUTH_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.name) {
+        parsed.name = parsed.name.replace(/(\s*(&|and)\s*Fatima|Fatima\s*(&|and)?\s*)/gi, "").trim() || "Zain";
+        localStorage.setItem(AUTH_KEY, JSON.stringify(parsed));
+      }
+      return parsed;
+    }
   } catch {}
   return null;
 }

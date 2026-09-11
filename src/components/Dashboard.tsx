@@ -3,10 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, X
+  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, X, Pencil
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
-import { AppState, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting } from "@/lib/types";
+import { AppState, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
 import AppTrackerPanel from "./AppTrackerPanel";
@@ -169,11 +169,225 @@ function AlertTicker() {
   );
 }
 
+/* ─── Meeting Time & Extraction Helpers ─── */
+function hasTimeTag(str?: string): boolean {
+  if (!str) return false;
+  // 1. Matches @H:MM or @HH:MM with optional am/pm (e.g. @2:30, @10:30am)
+  if (/@\d{1,2}:\d{2}(?:am|pm)?\b/i.test(str)) return true;
+  // 2. Matches @H or @HH with explicit am/pm (e.g. @6pm, @11am)
+  if (/@\d{1,2}(?:am|pm)\b/i.test(str)) return true;
+  // 3. Matches 3-4 digit military/shortcut time like @230, @400, @1030, @1430
+  if (/@(?:[1-9][0-5][0-9]|(?:[01][0-9]|2[0-3])[0-5][0-9])(?:am|pm)?\b/i.test(str)) return true;
+  // 4. Matches single/double digit standalone hours like @1 through @12 (e.g. @6, @9, @11)
+  if (/@(?:[1-9]|1[0-2])\b/i.test(str)) return true;
+  return false;
+}
+
+function parseMeetingId(id: string): { isTaskMeeting: boolean; taskId: string; chipIdx: number } {
+  if (id.startsWith("taskmeet::")) {
+    const parts = id.slice("taskmeet::".length).split("::");
+    const taskId = parts[0];
+    const chipIdx = parts[1] === "plain" ? -1 : parseInt(parts[1], 10);
+    return { isTaskMeeting: true, taskId, chipIdx: isNaN(chipIdx) ? -1 : chipIdx };
+  }
+
+  if (id.startsWith("taskmeet_")) {
+    // Backward compatibility for old ID format
+    const raw = id.slice("taskmeet_".length);
+    const lastUnderscore = raw.lastIndexOf("_");
+    const lastSegment = raw.slice(lastUnderscore + 1);
+    if (lastUnderscore !== -1 && /^\d+$/.test(lastSegment)) {
+      const taskId = raw.slice(0, lastUnderscore);
+      const chipIdx = parseInt(lastSegment, 10);
+      return { isTaskMeeting: true, taskId, chipIdx: isNaN(chipIdx) ? -1 : chipIdx };
+    } else {
+      return { isTaskMeeting: true, taskId: raw, chipIdx: -1 };
+    }
+  }
+
+  return { isTaskMeeting: false, taskId: "", chipIdx: -1 };
+}
+
+function parseMeetingTime(text: string): { cleanText: string; time: string } {
+  let clean = text;
+  let time = "";
+
+  // 1. Remove @Meet or @Meeting or @Meetings (case-insensitive)
+  clean = clean.replace(/@meets?\b|@meetings?\b/gi, "").trim();
+
+  // 2. Look for @time pattern:
+  // e.g. @2:30, @10:30am, @6pm, @230, @400, @1030, @6, @11
+  const timeMatch = clean.match(/@(\d{1,2}:\d{2}(?:am|pm)?|\d{1,2}(?:am|pm)|\d{3,4}(?:am|pm)?|[1-9]\b|1[0-2]\b)/i);
+  if (timeMatch) {
+    const raw = timeMatch[1].toLowerCase();
+    clean = clean.replace(timeMatch[0], "").trim();
+
+    if (raw.includes(":")) {
+      const parts = raw.split(":");
+      const hour = parseInt(parts[0], 10);
+      const min = parts[1].replace(/[^\d]/g, "");
+      if (!raw.includes("am") && !raw.includes("pm")) {
+        time = `${hour}:${min} ${hour >= 8 && hour <= 11 ? "AM" : "PM"}`;
+      } else {
+        time = raw.toUpperCase();
+      }
+    } else if (raw.endsWith("am") || raw.endsWith("pm")) {
+      time = raw.toUpperCase();
+    } else if (raw.length === 3) {
+      // e.g. 230 -> 2:30 PM, 915 -> 9:15 AM/PM
+      const hour = parseInt(raw[0], 10);
+      const min = raw.slice(1);
+      time = `${hour}:${min} ${hour >= 8 && hour <= 11 ? "AM" : "PM"}`;
+    } else if (raw.length === 4) {
+      // e.g. 1030 -> 10:30 AM, 0400 -> 4:00 PM, 1430 -> 2:30 PM
+      const hour = parseInt(raw.slice(0, 2), 10);
+      const min = raw.slice(2);
+      if (hour > 12) {
+        time = `${hour - 12}:${min} PM`;
+      } else if (hour === 12) {
+        time = `12:${min} PM`;
+      } else {
+        time = `${hour}:${min} ${hour >= 8 && hour < 12 ? "AM" : "PM"}`;
+      }
+    } else {
+      // e.g. 6 or 11
+      const hour = parseInt(raw, 10);
+      time = `${hour}:00 ${hour >= 8 && hour <= 11 ? "AM" : "PM"}`;
+    }
+  }
+
+  clean = clean.replace(/^[@\-:\s]+|[@\-:\s]+$/g, "").trim();
+
+  return {
+    cleanText: clean || text,
+    time: time || "Scheduled",
+  };
+}
+
+function extractMeetingsFromTasks(
+  subTasks: SubTask[],
+  managerNotes: ManagerNote[]
+): {
+  meeting: Meeting;
+  sourceId: string;
+  sourceType: "chip" | "plain";
+  chipIdx?: number;
+  isNote?: boolean;
+}[] {
+  const list: {
+    meeting: Meeting;
+    sourceId: string;
+    sourceType: "chip" | "plain";
+    chipIdx?: number;
+    isNote?: boolean;
+  }[] = [];
+
+  const isMeetingKeyword = (str?: string) =>
+    !!str && (/@meets?\b|@meetings?\b/i.test(str) || hasTimeTag(str));
+
+  const isMeetingRow = (str?: string) =>
+    !!str &&
+    (isMeetingKeyword(str) ||
+      str.toLowerCase().trim() === "meetings" ||
+      str.toLowerCase().trim() === "meeting" ||
+      str.toLowerCase().trim() === "@meetings" ||
+      str.toLowerCase().trim() === "@meeting");
+
+  const processItem = (
+    item: { id: string; text?: string; content?: string; chips?: TaskChip[]; employee?: string; status: Status; isSection?: boolean },
+    isNote: boolean
+  ) => {
+    if (item.isSection) return;
+
+    const rowEmployee = (item.employee || "").trim();
+    const rowIsMeeting = isMeetingRow(rowEmployee);
+
+    if (item.chips && item.chips.length > 0) {
+      item.chips.forEach((chip, cIdx) => {
+        const chipHasMeeting = isMeetingKeyword(chip.text);
+        if (rowIsMeeting || chipHasMeeting) {
+          const parsed = parseMeetingTime(chip.text);
+          const projName = parsed.cleanText || (rowEmployee ? rowEmployee.replace(/^@/, "") : "Meeting");
+          const empClean = rowEmployee.replace(/^@/, "").trim();
+          const employeeIds = !rowIsMeeting && empClean ? [empClean] : [];
+
+          list.push({
+            meeting: {
+              id: `taskmeet::${item.id}::${cIdx}`,
+              projectId: projName,
+              employeeIds,
+              time: parsed.time,
+              status: chip.status,
+            },
+            sourceId: item.id,
+            sourceType: "chip",
+            chipIdx: cIdx,
+            isNote,
+          });
+        }
+      });
+    } else {
+      const text = item.text || item.content || "";
+      const textHasMeeting = isMeetingKeyword(text);
+      if (rowIsMeeting || textHasMeeting) {
+        const parsed = parseMeetingTime(text);
+        const projName = parsed.cleanText || (rowEmployee ? rowEmployee.replace(/^@/, "") : "Meeting");
+        const empClean = rowEmployee.replace(/^@/, "").trim();
+        const employeeIds = !rowIsMeeting && empClean ? [empClean] : [];
+
+        list.push({
+          meeting: {
+            id: `taskmeet::${item.id}::plain`,
+            projectId: projName,
+            employeeIds,
+            time: parsed.time,
+            status: item.status,
+          },
+          sourceId: item.id,
+          sourceType: "plain",
+          isNote,
+        });
+      }
+    }
+  };
+
+  (subTasks || []).forEach((s) => processItem(s, false));
+  (managerNotes || []).forEach((n) => processItem(n, true));
+
+  return list;
+}
+
 export default function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const userName = (user?.name || "Zain")
+    .replace(/(\s*(&|and)\s*Fatima|Fatima\s*(&|and)?\s*)/gi, "")
+    .trim() || "Zain";
+
   const [state, setState] = useState<AppState | null>(null);
   const [tab, setTab] = useState<"tasks" | "goals" | "apptracker" | "content" | "history" | "projects" | "employees">("tasks");
   const [mNote, setMNote] = useState("");
   const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
+
+  // Clean Fatima from employees and local session storage
+  useEffect(() => {
+    if (state && state.employees && state.employees.some((e) => e.name.toLowerCase().includes("fatima"))) {
+      save({
+        ...state,
+        employees: state.employees.filter((e) => !e.name.toLowerCase().includes("fatima")),
+      });
+    }
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("devmate_auth");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.name && /fatima/i.test(parsed.name)) {
+            parsed.name = parsed.name.replace(/(\s*(&|and)\s*Fatima|Fatima\s*(&|and)?\s*)/gi, "").trim() || "Zain";
+            localStorage.setItem("devmate_auth", JSON.stringify(parsed));
+          }
+        }
+      } catch {}
+    }
+  }, [state]);
 
   const [activeSlide, setActiveSlide] = useState<"timeline" | "tables">("timeline");
   const [viewportHeight, setViewportHeight] = useState<number | string>("auto");
@@ -281,7 +495,11 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           const doneChips = t.chips.filter((c) => c.status === "done");
 
           if (incompleteChips.length > 0) {
-            const resetChips = incompleteChips.map((c) => ({ ...c, status: "not_started" as Status }));
+            const resetChips = incompleteChips.map((c) => ({
+              ...c,
+              status: "not_started" as Status,
+              subtasks: c.subtasks ? c.subtasks.map((st) => ({ ...st, status: "not_started" as Status })) : undefined,
+            }));
             const newText = resetChips.map((c) => c.text).join(", ");
             carriedTasksInBlock.push({
               ...t,
@@ -341,7 +559,11 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
         const nonDoingChips = note.chips.filter((c) => c.status !== "doing");
 
         if (doingChips.length > 0) {
-          const resetChips = doingChips.map((c) => ({ ...c, status: "not_started" as Status }));
+          const resetChips = doingChips.map((c) => ({
+            ...c,
+            status: "not_started" as Status,
+            subtasks: c.subtasks ? c.subtasks.map((st) => ({ ...st, status: "not_started" as Status })) : undefined,
+          }));
           const newText = resetChips.map((c) => c.text).join(", ");
           carriedNotes.push({
             ...note,
@@ -501,7 +723,46 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   };
 
   const deleteMeeting = (id: string) => {
-    if (!window.confirm("Delete this meeting?")) return;
+    if (!window.confirm("Remove this meeting?")) return;
+
+    const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+
+    if (isTaskMeeting) {
+      setDay((d) => ({
+        ...d,
+        subTasks: d.subTasks
+          .map((s) => {
+            if (s.id !== taskId) return s;
+            if (chipIdx >= 0 && s.chips) {
+              const nc = s.chips.filter((_, i) => i !== chipIdx);
+              return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
+            } else {
+              return { ...s, text: "" };
+            }
+          })
+          .filter((s) => {
+            if (s.isSection) return true;
+            if (s.chips && s.chips.length > 0) return true;
+            return s.text.trim().length > 0;
+          }),
+        managerNotes: d.managerNotes
+          .map((n) => {
+            if (n.id !== taskId) return n;
+            if (chipIdx >= 0 && n.chips) {
+              const nc = n.chips.filter((_, i) => i !== chipIdx);
+              return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
+            } else {
+              return { ...n, content: "" };
+            }
+          })
+          .filter((n) => {
+            if (n.chips && n.chips.length > 0) return true;
+            return n.content.trim().length > 0;
+          }),
+      }));
+      return;
+    }
+
     setDay((d) => ({
       ...d,
       meetings: (d.meetings || []).filter((meet) => meet.id !== id),
@@ -509,6 +770,50 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   };
 
   const cycleMeetingStatus = (id: string) => {
+    const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+
+    if (isTaskMeeting) {
+      setDay((d) => ({
+        ...d,
+        subTasks: d.subTasks.map((s) => {
+          if (s.id !== taskId) return s;
+          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+            const newChips = s.chips.map((c, i) => {
+              if (i !== chipIdx) return c;
+              if (c.subtasks && c.subtasks.length > 0) {
+                const allDone = c.subtasks.every((st) => st.status === "done");
+                const nextStatus: Status = allDone ? "not_started" : "done";
+                return { ...c, status: nextStatus, subtasks: c.subtasks.map((st) => ({ ...st, status: nextStatus })) };
+              }
+              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+              return { ...c, status: nextStatus };
+            });
+            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
+            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
+            return { ...s, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+          } else {
+            return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
+          }
+        }),
+        managerNotes: d.managerNotes.map((n) => {
+          if (n.id !== taskId) return n;
+          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+            const newChips = n.chips.map((c, i) => {
+              if (i !== chipIdx) return c;
+              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+              return { ...c, status: nextStatus };
+            });
+            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
+            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
+            return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+          } else {
+            return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
+          }
+        }),
+      }));
+      return;
+    }
+
     setDay((d) => ({
       ...d,
       meetings: (d.meetings || []).map((meet) => {
@@ -522,6 +827,52 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     }));
   };
 
+  const editMeeting = (id: string, updates: { projectId: string; time: string }) => {
+    const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+
+    if (isTaskMeeting) {
+      setDay((d) => ({
+        ...d,
+        subTasks: d.subTasks.map((s) => {
+          if (s.id !== taskId) return s;
+          const timeTag = updates.time ? (updates.time.startsWith("@") ? updates.time : `@${updates.time}`) : "@Meet";
+          const newText = `${updates.projectId} ${timeTag}`.trim();
+
+          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+            const newChips = s.chips.map((c, i) =>
+              i === chipIdx ? { ...c, text: newText } : c
+            );
+            return { ...s, chips: newChips, text: newChips.map((c) => c.text).join(", ") };
+          } else {
+            return { ...s, text: newText };
+          }
+        }),
+        managerNotes: d.managerNotes.map((n) => {
+          if (n.id !== taskId) return n;
+          const timeTag = updates.time ? (updates.time.startsWith("@") ? updates.time : `@${updates.time}`) : "@Meet";
+          const newContent = `${updates.projectId} ${timeTag}`.trim();
+
+          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+            const newChips = n.chips.map((c, i) =>
+              i === chipIdx ? { ...c, text: newContent } : c
+            );
+            return { ...n, chips: newChips, content: newChips.map((c) => c.text).join(", ") };
+          } else {
+            return { ...n, content: newContent };
+          }
+        }),
+      }));
+      return;
+    }
+
+    setDay((d) => ({
+      ...d,
+      meetings: (d.meetings || []).map((m) =>
+        m.id === id ? { ...m, projectId: updates.projectId, time: updates.time } : m
+      ),
+    }));
+  };
+
   // cycleMain changes status (sleep/workout streak tracking) — recalc streaks here
   const cycleMain = (id: string) => {
     const updated = { ...state, days: { ...state.days, [state.currentDate]: { ...day, mainTasks: day.mainTasks.map((t) => t.id === id ? { ...t, status: SCYCLE[(SCYCLE.indexOf(t.status) + 1) % 3] } : t) } } };
@@ -529,6 +880,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   };
   const setMainName = (id: string, name: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, name } : t) }));
   const setTime = (id: string, f: "from" | "to", v: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, [f]: v } : t) }));
+  const setGoalLink = (id: string, goalId: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, goalLink: goalId } : t) }));
   const delMain = (id: string) => {
     const t = day.mainTasks.find((t) => t.id === id);
     if (!window.confirm(`Delete "${t?.name || "this task"}"?`)) return;
@@ -552,9 +904,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const totalM = actionableMainTasks.length;
   const doneS = day.subTasks.filter(i => !i.isSection && i.status === "done").length;
   const totalS = day.subTasks.filter(i => !i.isSection).length;
-
-  const doneF = day.managerNotes.filter(n => n.status === "done").length;
-  const totalF = day.managerNotes.length;
 
   const grouped = day.mainTasks.reduce((a, t) => { (a[t.category] ??= []).push(t); return a; }, {} as Record<string, MainTask[]>);
 
@@ -587,6 +936,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
             {([
               ["tasks", LayoutDashboard, "Daily Tasks"],
               ["goals", Target, "Goal Tracker"],
+              ["history", Archive, "History"],
             ] as const).map(([id, Icon, label]) => (
               <button key={id} onClick={() => setTab(id as any)} style={navBtn(tab === id)}>
                 <Icon size={17} /> {label}
@@ -627,10 +977,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           <div style={{ paddingTop: 16, borderTop: "1px solid #F0EEEC" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
               <div style={{ width: 32, height: 32, borderRadius: 16, background: user.role === "owner" ? "#2563EB" : "#8B5CF6", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
-                {user.name[0]}
+                {userName[0]}
               </div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{user.name}</div>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{userName}</div>
                 <div style={{ fontSize: 10, color: "#A8A29E", textTransform: "capitalize" }}>{user.role}</div>
               </div>
             </div>
@@ -653,13 +1003,24 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
                     <div>
                       <h1 style={{ fontSize: 22, fontWeight: 600, fontFamily: "'Fraunces', serif", marginBottom: 4 }}>
-                        {greeting()}, {user.name}
+                        {greeting()}, {userName}
                       </h1>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <button onClick={() => go(-1)} style={{ padding: 2, cursor: "pointer" }}><ChevronLeft size={16} color="#A8A29E" /></button>
                         <span style={{ fontSize: 13, fontWeight: 500, color: "#78716C" }}>{fmtDate(state.currentDate)}</span>
                         {isToday && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#EFF6FF", color: "#2563EB" }}>Today</span>}
                         <button onClick={() => go(1)} style={{ padding: 2, cursor: "pointer" }}><ChevronRight size={16} color="#A8A29E" /></button>
+                      </div>
+                    </div>
+                    {/* Day rating */}
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Rate this day</span>
+                      <div style={{ display: "flex", gap: 2 }}>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <button key={n} onClick={() => rate(day.rating === n ? 0 : n)} title={`Rate ${n}/5`} style={{ padding: 1, cursor: "pointer" }}>
+                            <Star size={16} color={n <= day.rating ? "#F59E0B" : "#E7E5E4"} fill={n <= day.rating ? "#F59E0B" : "none"} />
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -842,6 +1203,33 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                                             onFocus={(e) => (e.target.style.background = "#F3F4F6")}
                                             onBlur={(e) => (e.target.style.background = "none")}
                                           />
+                                          {/* Streak badge — Sleep/Workout only */}
+                                          {(task.id === "sleep" || task.id === "workout") && (state.streaks?.[task.id] ?? 0) > 0 && (
+                                            <span title={`${state.streaks[task.id]}-day streak`} style={{ display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 10, background: "#FFF7ED", color: "#EA580C" }}>
+                                              <Flame size={11} /> {state.streaks[task.id]}
+                                            </span>
+                                          )}
+                                          {/* Goal link picker */}
+                                          {state.goals.length > 0 && (() => {
+                                            const linked = state.goals.find((g) => g.id === task.goalLink);
+                                            return (
+                                              <select
+                                                value={task.goalLink || ""}
+                                                onChange={(e) => setGoalLink(task.id, e.target.value)}
+                                                title="Link this task to a goal"
+                                                style={{
+                                                  flexShrink: 0, fontSize: 10, fontWeight: 600, padding: "2px 4px", borderRadius: 6,
+                                                  border: "1px solid " + (linked ? linked.color + "60" : "#E7E5E4"),
+                                                  background: linked ? linked.color + "15" : "#FAFAF9",
+                                                  color: linked ? linked.color : "#A8A29E",
+                                                  maxWidth: 92, cursor: "pointer"
+                                                }}
+                                              >
+                                                <option value="">No goal</option>
+                                                {state.goals.map((g) => <option key={g.id} value={g.id}>{g.title}</option>)}
+                                              </select>
+                                            );
+                                          })()}
                                         </div>
                                         {/* Time */}
                                         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -877,6 +1265,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   <DailyTodos
                     subTasks={day.subTasks as any}
                     managerNotes={day.managerNotes as any}
+                    pendingMeetingsCount={(day.meetings || []).filter((m) => m.status !== "done").length}
                     inp={inp}
                     card={card}
                     onDoneForToday={doneForToday}
@@ -902,8 +1291,22 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     onCycleSubChip={(id, chipIdx) => setDay((d) => ({
                       ...d, subTasks: d.subTasks.map((s) => {
                         if (s.id !== id || !s.chips) return s;
-                        const newChips = s.chips.map((c, i) => i === chipIdx ? { ...c, status: SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3] } : c);
-                        const allDone = newChips.every(c => c.status === "done");
+                        const newChips = s.chips.map((c, i) => {
+                          if (i !== chipIdx) return c;
+                          const curStatus: Status = c.status || "not_started";
+                          const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
+                          if (c.subtasks && c.subtasks.length > 0) {
+                            let newSubs = c.subtasks;
+                            if (nextStatus === "done") {
+                              newSubs = c.subtasks.map(st => ({ ...st, status: "done" as Status }));
+                            } else if (nextStatus === "not_started") {
+                              newSubs = c.subtasks.map(st => ({ ...st, status: "not_started" as Status }));
+                            }
+                            return { ...c, status: nextStatus, subtasks: newSubs };
+                          }
+                          return { ...c, status: nextStatus };
+                        });
+                        const allDone = newChips.length > 0 && newChips.every(c => c.status === "done");
                         const anyDoing = newChips.some(c => c.status === "doing" || c.status === "done");
                         return { ...s, chips: newChips, status: allDone ? "done" : anyDoing ? "doing" : "not_started" };
                       })
@@ -919,8 +1322,22 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     onCycleNoteChip={(id, chipIdx) => setDay((d) => ({
                       ...d, managerNotes: d.managerNotes.map((n) => {
                         if (n.id !== id || !n.chips) return n;
-                        const newChips = n.chips.map((c, i) => i === chipIdx ? { ...c, status: SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3] } : c);
-                        const allDone = newChips.every(c => c.status === "done");
+                        const newChips = n.chips.map((c, i) => {
+                          if (i !== chipIdx) return c;
+                          const curStatus: Status = c.status || "not_started";
+                          const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
+                          if (c.subtasks && c.subtasks.length > 0) {
+                            let newSubs = c.subtasks;
+                            if (nextStatus === "done") {
+                              newSubs = c.subtasks.map(st => ({ ...st, status: "done" as Status }));
+                            } else if (nextStatus === "not_started") {
+                              newSubs = c.subtasks.map(st => ({ ...st, status: "not_started" as Status }));
+                            }
+                            return { ...c, status: nextStatus, subtasks: newSubs };
+                          }
+                          return { ...c, status: nextStatus };
+                        });
+                        const allDone = newChips.length > 0 && newChips.every(c => c.status === "done");
                         const anyDoing = newChips.some(c => c.status === "doing" || c.status === "done");
                         return { ...n, chips: newChips, status: allDone ? "done" : anyDoing ? "doing" : "not_started" };
                       })
@@ -991,12 +1408,12 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         }));
                       }
                     }}
-                    onAddChipToRow={(id, list, text) => {
+                    onAddChipToRow={(id, list, chip) => {
                       if (list === "daily") {
                         setDay((d) => ({
                           ...d, subTasks: d.subTasks.map((s) => {
                             if (s.id !== id) return s;
-                            const nc = [...(s.chips || []), { text, status: "not_started" as Status }];
+                            const nc = [...(s.chips || []), chip];
                             return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
                           })
                         }));
@@ -1004,9 +1421,144 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         setDay((d) => ({
                           ...d, managerNotes: d.managerNotes.map((n) => {
                             if (n.id !== id) return n;
-                            const nc = [...(n.chips || []), { text, status: "not_started" as Status }];
+                            const nc = [...(n.chips || []), chip];
                             return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
                           })
+                        }));
+                      }
+                    }}
+                    onToggleSubtask={(id, list, chipIdx, subtaskIdx) => {
+                      const updateChips = (chips: TaskChip[]) => {
+                        return chips.map((c, i) => {
+                          if (i !== chipIdx || !c.subtasks) return c;
+                          const newSubtasks = c.subtasks.map((st, si) => {
+                            if (si !== subtaskIdx) return st;
+                            const curStatus: Status = st.status || "not_started";
+                            const nextStatus: Status = SCYCLE[(SCYCLE.indexOf(curStatus) + 1) % 3];
+                            return { ...st, status: nextStatus };
+                          });
+                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
+                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
+                          const nextParentStatus: Status = (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status;
+                          return { ...c, subtasks: newSubtasks, status: nextParentStatus };
+                        });
+                      };
+                      if (list === "daily") {
+                        setDay((d) => ({
+                          ...d,
+                          subTasks: d.subTasks.map((s) => {
+                            if (s.id !== id || !s.chips) return s;
+                            const nc = updateChips(s.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...s, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
+                        }));
+                      } else {
+                        setDay((d) => ({
+                          ...d,
+                          managerNotes: d.managerNotes.map((n) => {
+                            if (n.id !== id || !n.chips) return n;
+                            const nc = updateChips(n.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...n, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
+                        }));
+                      }
+                    }}
+                    onAddSubtaskToChip={(id, list, chipIdx, text) => {
+                      if (!text.trim()) return;
+                      const updateChips = (chips: TaskChip[]) => {
+                        return chips.map((c, i) => {
+                          if (i !== chipIdx) return c;
+                          const currentSubtasks = c.subtasks || [];
+                          const newSubtasks = [...currentSubtasks, { id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6), text: text.trim(), status: "not_started" as Status }];
+                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
+                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
+                          const nextStatus: Status = (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status;
+                          return { ...c, subtasks: newSubtasks, status: nextStatus };
+                        });
+                      };
+                      if (list === "daily") {
+                        setDay((d) => ({
+                          ...d,
+                          subTasks: d.subTasks.map((s) => {
+                            if (s.id !== id || !s.chips) return s;
+                            const nc = updateChips(s.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...s, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
+                        }));
+                      } else {
+                        setDay((d) => ({
+                          ...d,
+                          managerNotes: d.managerNotes.map((n) => {
+                            if (n.id !== id || !n.chips) return n;
+                            const nc = updateChips(n.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...n, chips: nc, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
+                        }));
+                      }
+                    }}
+                    onEditSubtask={(id, list, chipIdx, subtaskIdx, newText) => {
+                      const updateChips = (chips: TaskChip[]) => {
+                        return chips.map((c, i) => {
+                          if (i !== chipIdx || !c.subtasks) return c;
+                          const newSubtasks = c.subtasks.map((st, si) => (si === subtaskIdx ? { ...st, text: newText } : st));
+                          return { ...c, subtasks: newSubtasks };
+                        });
+                      };
+                      if (list === "daily") {
+                        setDay((d) => ({
+                          ...d,
+                          subTasks: d.subTasks.map((s) => (s.id === id && s.chips ? { ...s, chips: updateChips(s.chips) } : s)),
+                        }));
+                      } else {
+                        setDay((d) => ({
+                          ...d,
+                          managerNotes: d.managerNotes.map((n) => (n.id === id && n.chips ? { ...n, chips: updateChips(n.chips) } : n)),
+                        }));
+                      }
+                    }}
+                    onDeleteSubtask={(id, list, chipIdx, subtaskIdx) => {
+                      const updateChips = (chips: TaskChip[]) => {
+                        return chips.map((c, i) => {
+                          if (i !== chipIdx || !c.subtasks) return c;
+                          const newSubtasks = c.subtasks.filter((_, si) => si !== subtaskIdx);
+                          const allDone = newSubtasks.length > 0 && newSubtasks.every((st) => st.status === "done");
+                          const anyDoing = newSubtasks.some((st) => st.status === "done" || st.status === "doing");
+                          return {
+                            ...c,
+                            subtasks: newSubtasks.length > 0 ? newSubtasks : undefined,
+                            status: newSubtasks.length > 0 ? (allDone ? "done" : anyDoing ? "doing" : "not_started") : c.status,
+                          };
+                        });
+                      };
+                      if (list === "daily") {
+                        setDay((d) => ({
+                          ...d,
+                          subTasks: d.subTasks.map((s) => {
+                            if (s.id !== id || !s.chips) return s;
+                            const nc = updateChips(s.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...s, chips: nc, status: (nc.length === 0 ? "not_started" : allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
+                        }));
+                      } else {
+                        setDay((d) => ({
+                          ...d,
+                          managerNotes: d.managerNotes.map((n) => {
+                            if (n.id !== id || !n.chips) return n;
+                            const nc = updateChips(n.chips);
+                            const allDone = nc.length > 0 && nc.every((c) => c.status === "done");
+                            const anyDoing = nc.some((c) => c.status === "doing" || c.status === "done");
+                            return { ...n, chips: nc, status: (nc.length === 0 ? "not_started" : allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+                          }),
                         }));
                       }
                     }}
@@ -1047,16 +1599,26 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                 <div style={{ position: "sticky", top: 28, display: "flex", flexDirection: "column", gap: 32 }}>
 
                   {/* Daily Meetings Section */}
-                  <MeetingsSection
-                    meetings={day.meetings || []}
-                    projects={state.projects || []}
-                    employees={state.employees || []}
-                    cardStyle={card}
-                    inputStyle={inp}
-                    onAddMeeting={addMeeting}
-                    onDeleteMeeting={deleteMeeting}
-                    onCycleStatus={cycleMeetingStatus}
-                  />
+                  {(() => {
+                    const taskMeetings = extractMeetingsFromTasks(day.subTasks || [], day.managerNotes || []);
+                    const allMeetings: Meeting[] = [
+                      ...(day.meetings || []),
+                      ...taskMeetings.map((item) => item.meeting),
+                    ];
+                    return (
+                      <MeetingsSection
+                        meetings={allMeetings}
+                        projects={state.projects || []}
+                        employees={state.employees || []}
+                        cardStyle={card}
+                        inputStyle={inp}
+                        onAddMeeting={addMeeting}
+                        onDeleteMeeting={deleteMeeting}
+                        onCycleStatus={cycleMeetingStatus}
+                        onEditMeeting={editMeeting}
+                      />
+                    );
+                  })()}
 
                   {/* Employee Tasks Overview Section */}
                   <EmployeeTasksSection
@@ -1141,6 +1703,7 @@ interface MeetingsSectionProps {
   onAddMeeting: (m: Omit<Meeting, "id">) => void;
   onDeleteMeeting: (id: string) => void;
   onCycleStatus: (id: string) => void;
+  onEditMeeting?: (id: string, updates: { projectId: string; time: string }) => void;
 }
 
 function MeetingsSection({
@@ -1152,8 +1715,12 @@ function MeetingsSection({
   onAddMeeting,
   onDeleteMeeting,
   onCycleStatus,
+  onEditMeeting,
 }: MeetingsSectionProps) {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editTime, setEditTime] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [customProjectName, setCustomProjectName] = useState("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
@@ -1254,6 +1821,12 @@ function MeetingsSection({
     not_started: { bg: "#F3F4F6", dot: "#D1D5DB", text: "#4B5563", border: "#E5E7EB" },
     doing: { bg: "#FFFBEB", dot: "#F59E0B", text: "#D97706", border: "#FDE68A" },
     done: { bg: "#F0FDF4", dot: "#16A34A", text: "#16A34A", border: "#BBF7D0" },
+  };
+
+  const handleSaveEdit = (id: string) => {
+    if (!editTitle.trim()) return;
+    onEditMeeting?.(id, { projectId: editTitle.trim(), time: editTime.trim() });
+    setEditingMeetingId(null);
   };
 
   return (
@@ -1445,6 +2018,8 @@ function MeetingsSection({
           meetings.map(m => {
             const projColor = getProjectColor(m.projectId);
             const statusConfig = statusColorMap[m.status] || statusColorMap.not_started;
+            const isEditing = editingMeetingId === m.id;
+
             return (
               <div
                 key={m.id}
@@ -1459,148 +2034,229 @@ function MeetingsSection({
                   transition: "box-shadow 0.15s"
                 }}
                 onMouseEnter={(e) => {
-                  const delBtn = e.currentTarget.querySelector(".meeting-del-btn") as HTMLElement;
-                  if (delBtn) delBtn.style.opacity = "1";
+                  const actionBtns = e.currentTarget.querySelectorAll(".meeting-action-btn") as NodeListOf<HTMLElement>;
+                  actionBtns.forEach((b) => { b.style.opacity = "1"; });
                 }}
                 onMouseLeave={(e) => {
-                  const delBtn = e.currentTarget.querySelector(".meeting-del-btn") as HTMLElement;
-                  if (delBtn) delBtn.style.opacity = "0";
+                  const actionBtns = e.currentTarget.querySelectorAll(".meeting-action-btn") as NodeListOf<HTMLElement>;
+                  actionBtns.forEach((b) => { b.style.opacity = "0"; });
                 }}
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {/* Project Tag */}
-                    <span
-                      style={{
-                        padding: "1.5px 6px",
-                        borderRadius: 6,
-                        background: projColor + "12",
-                        color: projColor,
-                        fontSize: 10,
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.3,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        maxWidth: 100
-                      }}
-                    >
-                      {m.projectId}
-                    </span>
-
-                    {/* Time */}
-                    <span style={{ fontSize: 11, color: "#78716C", display: "inline-flex", alignItems: "center", gap: 3 }}>
-                      <Clock size={11} color="#A8A29E" />
-                      {m.time}
-                    </span>
+                {isEditing ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        autoFocus
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="Title / Project"
+                        style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleSaveEdit(m.id);
+                          if (e.key === "Escape") setEditingMeetingId(null);
+                        }}
+                      />
+                      <input
+                        value={editTime}
+                        onChange={(e) => setEditTime(e.target.value)}
+                        placeholder="Time (e.g. 2:30 PM, @230)"
+                        style={{ ...inputStyle, width: 105, fontSize: 12, padding: "5px 8px" }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleSaveEdit(m.id);
+                          if (e.key === "Escape") setEditingMeetingId(null);
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                      <button
+                        onClick={() => setEditingMeetingId(null)}
+                        style={{
+                          padding: "3px 8px", fontSize: 11, background: "none",
+                          border: "1px solid #E7E5E4", borderRadius: 6, cursor: "pointer", color: "#78716C"
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleSaveEdit(m.id)}
+                        style={{
+                          padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                          background: "#2563EB", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer"
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
                   </div>
-
-                  {/* Employees Avatars List */}
-                  <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}>
-                    <div style={{ display: "flex", alignItems: "center" }}>
-                      {m.employeeIds.slice(0, 3).map((empName: string, i: number) => {
-                        const avatarBg = getAvatarColor(empName);
-                        return (
-                          <div
-                            key={i}
-                            title={empName}
-                            style={{
-                              width: 20,
-                              height: 20,
-                              borderRadius: "50%",
-                              background: avatarBg,
-                              border: "1.5px solid #fff",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              color: "#fff",
-                              fontSize: 9,
-                              fontWeight: 700,
-                              marginLeft: i > 0 ? -5 : 0,
-                              zIndex: 10 - i,
-                              flexShrink: 0
-                            }}
-                          >
-                            {initials(empName)}
-                          </div>
-                        );
-                      })}
-                      {m.employeeIds.length > 3 && (
-                        <div
-                          title={m.employeeIds.slice(3).join(", ")}
+                ) : (
+                  <>
+                    <div
+                      style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0, cursor: "pointer" }}
+                      onDoubleClick={() => {
+                        setEditingMeetingId(m.id);
+                        setEditTitle(m.projectId);
+                        setEditTime(m.time);
+                      }}
+                      title="Double-click to edit meeting"
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {/* Project Tag */}
+                        <span
                           style={{
-                            width: 20,
-                            height: 20,
-                            borderRadius: "50%",
-                            background: "#E7E5E4",
-                            border: "1.5px solid #fff",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            color: "#78716C",
-                            fontSize: 9,
+                            padding: "1.5px 6px",
+                            borderRadius: 6,
+                            background: projColor + "12",
+                            color: projColor,
+                            fontSize: 10,
                             fontWeight: 700,
-                            marginLeft: -5,
-                            zIndex: 0,
-                            flexShrink: 0
+                            textTransform: "uppercase",
+                            letterSpacing: 0.3,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            maxWidth: 150
                           }}
                         >
-                          +{m.employeeIds.length - 3}
+                          {m.projectId}
+                        </span>
+
+                        {/* Time */}
+                        <span style={{ fontSize: 11, color: "#78716C", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                          <Clock size={11} color="#A8A29E" />
+                          {m.time}
+                        </span>
+                      </div>
+
+                      {/* Employees Avatars List */}
+                      <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}>
+                        <div style={{ display: "flex", alignItems: "center" }}>
+                          {m.employeeIds.slice(0, 3).map((empName: string, i: number) => {
+                            const avatarBg = getAvatarColor(empName);
+                            return (
+                              <div
+                                key={i}
+                                title={empName}
+                                style={{
+                                  width: 20,
+                                  height: 20,
+                                  borderRadius: "50%",
+                                  background: avatarBg,
+                                  border: "1.5px solid #fff",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  color: "#fff",
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  marginLeft: i > 0 ? -5 : 0,
+                                  zIndex: 10 - i,
+                                  flexShrink: 0
+                                }}
+                              >
+                                {initials(empName)}
+                              </div>
+                            );
+                          })}
+                          {m.employeeIds.length > 3 && (
+                            <div
+                              title={m.employeeIds.slice(3).join(", ")}
+                              style={{
+                                width: 20,
+                                height: 20,
+                                borderRadius: "50%",
+                                background: "#E7E5E4",
+                                border: "1.5px solid #fff",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#78716C",
+                                fontSize: 9,
+                                fontWeight: 700,
+                                marginLeft: -5,
+                                zIndex: 0,
+                                flexShrink: 0
+                              }}
+                            >
+                              +{m.employeeIds.length - 3}
+                            </div>
+                          )}
                         </div>
-                      )}
+                        {/* Compact employee name labels if only 1 */}
+                        {m.employeeIds.length === 1 && (
+                          <span style={{ fontSize: 11, color: "#78716C", marginLeft: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {m.employeeIds[0]}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    {/* Compact employee name labels if only 1 */}
-                    {m.employeeIds.length === 1 && (
-                      <span style={{ fontSize: 11, color: "#78716C", marginLeft: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {m.employeeIds[0]}
-                      </span>
-                    )}
-                  </div>
-                </div>
 
-                {/* Status indicator and Delete */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {/* Delete Button (visible on hover) */}
-                  <button
-                    onClick={() => onDeleteMeeting(m.id)}
-                    className="meeting-del-btn"
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "#EF4444",
-                      opacity: 0,
-                      cursor: "pointer",
-                      padding: 4,
-                      borderRadius: 4,
-                      transition: "opacity 0.1s"
-                    }}
-                    title="Delete meeting"
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                    {/* Status indicator and action buttons */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      {/* Edit Button (visible on hover) */}
+                      <button
+                        onClick={() => {
+                          setEditingMeetingId(m.id);
+                          setEditTitle(m.projectId);
+                          setEditTime(m.time);
+                        }}
+                        className="meeting-action-btn"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#78716C",
+                          opacity: 0,
+                          cursor: "pointer",
+                          padding: 4,
+                          borderRadius: 4,
+                          transition: "opacity 0.1s"
+                        }}
+                        title="Edit meeting"
+                      >
+                        <Pencil size={13} />
+                      </button>
 
-                  {/* Status Circle */}
-                  <button
-                    onClick={() => onCycleStatus(m.id)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      width: 24,
-                      height: 24,
-                      borderRadius: "50%",
-                      background: statusConfig.bg,
-                      border: `1.5px solid ${statusConfig.border}`,
-                      cursor: "pointer",
-                      padding: 0,
-                      transition: "all 0.15s"
-                    }}
-                    title={`Status: ${m.status.replace("_", " ")} (Click to change)`}
-                  >
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusConfig.dot }} />
-                  </button>
-                </div>
+                      {/* Delete Button (visible on hover) */}
+                      <button
+                        onClick={() => onDeleteMeeting(m.id)}
+                        className="meeting-action-btn"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#EF4444",
+                          opacity: 0,
+                          cursor: "pointer",
+                          padding: 4,
+                          borderRadius: 4,
+                          transition: "opacity 0.1s"
+                        }}
+                        title="Delete meeting"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+
+                      {/* Status Circle */}
+                      <button
+                        onClick={() => onCycleStatus(m.id)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 24,
+                          height: 24,
+                          borderRadius: "50%",
+                          background: statusConfig.bg,
+                          border: `1.5px solid ${statusConfig.border}`,
+                          cursor: "pointer",
+                          padding: 0,
+                          transition: "all 0.15s"
+                        }}
+                        title={`Status: ${m.status.replace("_", " ")} (Click to change)`}
+                      >
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusConfig.dot }} />
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })
@@ -1636,21 +2292,28 @@ function EmployeeTasksSection({
     // regex to strip the @Name tag (case-insensitive) from the displayed text
     const stripRe = new RegExp(`\\s*@${empName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
 
+    const rowEmpMatches = (rowEmp?: string) => {
+      if (!rowEmp) return false;
+      const cleanRow = rowEmp.replace(/^@/, "").toLowerCase().trim();
+      return cleanRow === cleanName;
+    };
+
     const results: { id: string; text: string; status: Status }[] = [];
 
-    // SubTasks ─ chip-based rows: only include the chips that carry @empName
+    // SubTasks ─ chip-based rows
     subTasks.forEach((s) => {
       if (s.chips && s.chips.length > 0) {
         s.chips.forEach((chip, idx) => {
-          if (chip.text.toLowerCase().includes(searchStr)) {
+          const chipHasThisEmp = chip.text.toLowerCase().includes(searchStr);
+          const chipHasOtherEmp = /@[A-Za-z0-9_]+/i.test(chip.text) && !chipHasThisEmp;
+          if (chipHasThisEmp || (rowEmpMatches(s.employee) && !chipHasOtherEmp)) {
             const cleanText = chip.text.replace(stripRe, "").trim();
             results.push({ id: `${s.id}_c${idx}`, text: cleanText || chip.text, status: chip.status });
           }
         });
       } else {
-        // Plain subtask: match via text content or the dedicated employee field
         const textHit = s.text.toLowerCase().includes(searchStr);
-        const empHit = s.employee && s.employee.toLowerCase() === cleanName;
+        const empHit = rowEmpMatches(s.employee);
         if (textHit || empHit) {
           const cleanText = s.text.replace(stripRe, "").trim();
           results.push({ id: s.id, text: cleanText || s.text, status: s.status });
@@ -1662,14 +2325,16 @@ function EmployeeTasksSection({
     managerNotes.forEach((n) => {
       if (n.chips && n.chips.length > 0) {
         n.chips.forEach((chip, idx) => {
-          if (chip.text.toLowerCase().includes(searchStr)) {
+          const chipHasThisEmp = chip.text.toLowerCase().includes(searchStr);
+          const chipHasOtherEmp = /@[A-Za-z0-9_]+/i.test(chip.text) && !chipHasThisEmp;
+          if (chipHasThisEmp || (rowEmpMatches(n.employee) && !chipHasOtherEmp)) {
             const cleanText = chip.text.replace(stripRe, "").trim();
             results.push({ id: `${n.id}_c${idx}`, text: cleanText || chip.text, status: chip.status });
           }
         });
       } else {
         const textHit = n.content.toLowerCase().includes(searchStr);
-        const empHit = n.employee && n.employee.toLowerCase() === cleanName;
+        const empHit = rowEmpMatches(n.employee);
         if (textHit || empHit) {
           const cleanText = n.content.replace(stripRe, "").trim();
           results.push({ id: n.id, text: cleanText || n.content, status: n.status });
@@ -1686,47 +2351,56 @@ function EmployeeTasksSection({
     done: "#16A34A",
   };
 
-  if (employees.length === 0) return null;
+  const filteredEmployees = employees.filter(emp => !emp.name.toLowerCase().includes("fatima"));
+  if (filteredEmployees.length === 0) return null;
+
+  const activeEmployees = filteredEmployees
+    .map(emp => ({ emp, tasks: getTasksForEmployee(emp.name) }))
+    .filter(item => item.tasks.length > 0);
 
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>Employee Tasks</h3>
+        <h3 style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#A8A29E" }}>
+          Employee Tasks {activeEmployees.length > 0 && <span style={{ color: "#8B5CF6", fontWeight: 700 }}>({activeEmployees.length})</span>}
+        </h3>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {employees.map(emp => {
-          const tasks = getTasksForEmployee(emp.name);
-          const isExpanded = !!expanded[emp.id];
+      {activeEmployees.length === 0 ? (
+        <div style={{ ...cardStyle, padding: "28px 16px", textAlign: "center", color: "#A8A29E" }}>
+          <Users size={24} style={{ margin: "0 auto 8px", opacity: 0.4 }} />
+          <div style={{ fontSize: 12, fontWeight: 500 }}>No employee tasks assigned today.</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {activeEmployees.map(({ emp, tasks }) => {
+            const isExpanded = !!expanded[emp.id];
 
-          return (
-            <div key={emp.id} style={{ ...cardStyle, overflow: "hidden" }}>
-              {/* Employee Row Header */}
-              <button
-                onClick={() => toggleExpand(emp.id)}
-                style={{
-                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "10px 12px", background: "none", border: "none", cursor: "pointer",
-                  textAlign: "left", fontSize: 13, fontWeight: 600, color: "#1C1917"
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
-                  <span style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", display: "inline-flex" }}>
-                    <ChevronDown size={14} color="#78716C" />
+            return (
+              <div key={emp.id} style={{ ...cardStyle, overflow: "hidden" }}>
+                {/* Employee Row Header */}
+                <button
+                  onClick={() => toggleExpand(emp.id)}
+                  style={{
+                    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "10px 12px", background: "none", border: "none", cursor: "pointer",
+                    textAlign: "left", fontSize: 13, fontWeight: 600, color: "#1C1917"
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                    <span style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s", display: "inline-flex" }}>
+                      <ChevronDown size={14} color="#78716C" />
+                    </span>
+                    <span>{emp.name}</span>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#8B5CF6", background: "#F5F3FF", padding: "2px 8px", borderRadius: 12 }}>
+                    {tasks.length} task{tasks.length !== 1 ? "s" : ""}
                   </span>
-                  <span>{emp.name}</span>
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: tasks.length > 0 ? "#8B5CF6" : "#A8A29E", background: tasks.length > 0 ? "#F5F3FF" : "#F5F5F4", padding: "2px 8px", borderRadius: 12 }}>
-                  {tasks.length} task{tasks.length !== 1 ? "s" : ""}
-                </span>
-              </button>
+                </button>
 
-              {/* Collapsible Tasks List */}
-              {isExpanded && (
-                <div style={{ borderTop: "1px solid #F0EEEC", background: "#FAFAF9", padding: "8px 12px" }}>
-                  {tasks.length === 0 ? (
-                    <div style={{ fontSize: 11, color: "#A8A29E", padding: "4px 0" }}>No tasks assigned today.</div>
-                  ) : (
+                {/* Collapsible Tasks List */}
+                {isExpanded && (
+                  <div style={{ borderTop: "1px solid #F0EEEC", background: "#FAFAF9", padding: "8px 12px" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       {tasks.map(t => (
                         <div key={t.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, padding: "2px 0" }}>
@@ -1737,13 +2411,13 @@ function EmployeeTasksSection({
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1797,11 +2471,88 @@ function HistoryView({ state, onGo }: { state: AppState; onGo: (d: string) => vo
   );
 }
 
+/* ─── Task Chip & Sub-tasks Syntax Parser ─── */
+function parseTaskChip(input: string): TaskChip {
+  const trimmed = input.trim();
+
+  // Pattern 1: Events (Luma | MeetUp | WhatsApp) or Events (Luma, MeetUp)
+  const parenMatch = trimmed.match(/^([^(]+)\s*\(([^)]+)\)$/);
+  if (parenMatch) {
+    const parentText = parenMatch[1].trim();
+    const rawSub = parenMatch[2];
+    const subItems = rawSub
+      .split(/[|,/]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (subItems.length > 0) {
+      return {
+        text: parentText,
+        status: "not_started",
+        subtasks: subItems.map((st) => ({
+          id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+          text: st,
+          status: "not_started" as Status,
+        })),
+      };
+    }
+  }
+
+  // Pattern 2: Events - Luma | MeetUp | WhatsApp (hyphen separating subtasks with pipe or comma)
+  const hyphenMatch = trimmed.match(/^([^-]+)\s*-\s*([^|,\n]+(?:[|,].+))$/);
+  if (hyphenMatch) {
+    const parentText = hyphenMatch[1].trim();
+    const rawSub = hyphenMatch[2];
+    const subItems = rawSub
+      .split(/[|,/]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (subItems.length > 0) {
+      return {
+        text: parentText,
+        status: "not_started",
+        subtasks: subItems.map((st) => ({
+          id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+          text: st,
+          status: "not_started" as Status,
+        })),
+      };
+    }
+  }
+
+  // Pattern 3: Events: Luma | MeetUp | WhatsApp or Events: Luma, MeetUp
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx > 0 && colonIdx < trimmed.length - 1) {
+    const parentText = trimmed.slice(0, colonIdx).trim();
+    const rawSub = trimmed.slice(colonIdx + 1);
+    const subItems = rawSub
+      .split(/[|,/]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (subItems.length > 0) {
+      return {
+        text: parentText,
+        status: "not_started",
+        subtasks: subItems.map((st) => ({
+          id: "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+          text: st,
+          status: "not_started" as Status,
+        })),
+      };
+    }
+  }
+
+  return {
+    text: trimmed,
+    status: "not_started",
+  };
+}
+
 /* ─── Daily Todos ─── */
 
 function DailyTodos({
   subTasks,
   managerNotes,
+  pendingMeetingsCount,
   inp,
   card,
   onDoneForToday,
@@ -1821,6 +2572,10 @@ function DailyTodos({
   onEditChip,
   onDeleteChip,
   onAddChipToRow,
+  onToggleSubtask,
+  onAddSubtaskToChip,
+  onEditSubtask,
+  onDeleteSubtask,
   mNote,
   setMNote,
   projects,
@@ -1828,16 +2583,17 @@ function DailyTodos({
 }: {
   subTasks: SubTask[];
   managerNotes: ManagerNote[];
+  pendingMeetingsCount: number;
   inp: React.CSSProperties;
   card: React.CSSProperties;
   onDoneForToday: () => void;
-  onAddSub: (text: string, chips?: { text: string; status: Status }[], employee?: string) => void;
+  onAddSub: (text: string, chips?: TaskChip[], employee?: string) => void;
   onAddSection: (name: string) => void;
   onEditSection: (id: string, name: string) => void;
   onCycleSub: (id: string) => void;
   onCycleSubChip: (id: string, chipIdx: number) => void;
   onDelSub: (id: string) => void;
-  onAddNote: (text: string, chips?: { text: string; status: Status }[], employee?: string) => void;
+  onAddNote: (text: string, chips?: TaskChip[], employee?: string) => void;
   onCycleNote: (id: string) => void;
   onCycleNoteChip: (id: string, chipIdx: number) => void;
   onDelNote: (id: string) => void;
@@ -1846,7 +2602,11 @@ function DailyTodos({
   onEditEmployee: (id: string, list: "daily" | "manager", newEmployee: string) => void;
   onEditChip: (id: string, list: "daily" | "manager", chipIdx: number, newText: string) => void;
   onDeleteChip: (id: string, list: "daily" | "manager", chipIdx: number) => void;
-  onAddChipToRow: (id: string, list: "daily" | "manager", text: string) => void;
+  onAddChipToRow: (id: string, list: "daily" | "manager", chip: TaskChip) => void;
+  onToggleSubtask: (id: string, list: "daily" | "manager", chipIdx: number, subtaskIdx: number) => void;
+  onAddSubtaskToChip: (id: string, list: "daily" | "manager", chipIdx: number, text: string) => void;
+  onEditSubtask: (id: string, list: "daily" | "manager", chipIdx: number, subtaskIdx: number, text: string) => void;
+  onDeleteSubtask: (id: string, list: "daily" | "manager", chipIdx: number, subtaskIdx: number) => void;
   mNote: string;
   setMNote: (v: string) => void;
   projects: Project[];
@@ -1855,7 +2615,13 @@ function DailyTodos({
   const [todoTab, setTodoTab] = useState<"daily" | "manager">("daily");
   const [taskInput, setTaskInput] = useState("");
   const [personInput, setPersonInput] = useState("");
-  const [pendingChips, setPendingChips] = useState<string[]>([]);
+  const [pendingChips, setPendingChips] = useState<TaskChip[]>([]);
+  const [openSubtaskPopover, setOpenSubtaskPopover] = useState<{ id: string; chipIdx: number } | null>(null);
+  const [popoverNewSubText, setPopoverNewSubText] = useState("");
+  const [editingSubtask, setEditingSubtask] = useState<{ id: string; chipIdx: number; subIdx: number } | null>(null);
+  const [editingSubtaskText, setEditingSubtaskText] = useState("");
+  const popoverRef = useRef<HTMLDivElement>(null);
+
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   // Section heading state
@@ -1863,6 +2629,19 @@ function DailyTodos({
   const [sectionInput, setSectionInput] = useState("");
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
   const [editingSectionText, setEditingSectionText] = useState("");
+
+  // Close subtask popover on outside click
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpenSubtaskPopover(null);
+      }
+    };
+    if (openSubtaskPopover) {
+      document.addEventListener("mousedown", handleOutside);
+      return () => document.removeEventListener("mousedown", handleOutside);
+    }
+  }, [openSubtaskPopover]);
 
   // ── Project picker dropdown ──
   const [showProjectDrop, setShowProjectDrop] = useState(false);
@@ -1931,7 +2710,8 @@ function DailyTodos({
   const queueChip = () => {
     const raw = taskInput.trim();
     if (!raw) return;
-    setPendingChips(p => [...p, raw]);
+    const parsed = parseTaskChip(raw);
+    setPendingChips(p => [...p, parsed]);
     setTaskInput("");
   };
 
@@ -1939,11 +2719,10 @@ function DailyTodos({
 
   const handleAdd = () => {
     const rawTask = taskInput.trim();
-    const chips: { text: string; status: Status }[] = [];
+    const chips: TaskChip[] = [...pendingChips];
 
-    if (pendingChips.length > 0 || rawTask) {
-      const allLabels = rawTask ? [...pendingChips, rawTask] : [...pendingChips];
-      allLabels.forEach(t => chips.push({ text: t, status: "not_started" }));
+    if (rawTask) {
+      chips.push(parseTaskChip(rawTask));
     }
 
     if (chips.length === 0) return;
@@ -2000,12 +2779,18 @@ function DailyTodos({
     setEditingChip(null);
   };
   const commitNewChip = (id: string) => {
-    if (newChipText.trim()) onAddChipToRow(id, todoTab, newChipText.trim());
+    if (newChipText.trim()) {
+      const parsed = parseTaskChip(newChipText.trim());
+      onAddChipToRow(id, todoTab, parsed);
+    }
     setAddingChipTo(null);
     setNewChipText("");
   };
 
-  const doingCount = subTasks.filter(s => !s.isSection && s.status === "doing").length + managerNotes.filter(n => n.status === "doing").length;
+  // "Done For Today" carries forward any item that isn't done yet (not just "doing") —
+  // this count must match that scope, or the button hides while carryable work still exists.
+  const pendingCount = subTasks.filter(s => !s.isSection && s.status !== "done").length
+    + pendingMeetingsCount;
 
   const commitSection = () => {
     const name = sectionInput.trim();
@@ -2026,49 +2811,52 @@ function DailyTodos({
     <div style={{ marginTop: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, borderBottom: "1px solid #F0EEEC", paddingBottom: 0 }}>
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <button onClick={() => setTodoTab("daily")} style={tabStyle(todoTab === "daily")}>Zain&apos;s Todos</button>
-          <button onClick={() => setTodoTab("manager")} style={tabStyle(todoTab === "manager")}>Manager&apos;s Todos</button>
-          {/* Add Section button — only show on Zain's tab */}
-          {todoTab === "daily" && (
-            addingSection ? (
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                <input
-                  autoFocus
-                  value={sectionInput}
-                  onChange={(e) => setSectionInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") commitSection(); if (e.key === "Escape") { setAddingSection(false); setSectionInput(""); } }}
-                  onBlur={commitSection}
-                  placeholder="Section name…"
-                  style={{
-                    fontSize: 11, fontWeight: 700, padding: "3px 10px",
-                    borderRadius: 8, border: "1.5px solid #2563EB",
-                    background: "#EFF6FF", color: "#2563EB", outline: "none", width: 140,
-                  }}
-                />
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingSection(true)}
-                title="Add a section heading to group tasks"
+          <div style={{
+            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1,
+            color: "#1C1917",
+            borderBottom: "2px solid #2563EB",
+            padding: "0 8px 6px",
+          }}>
+            Zain&apos;s Todos
+          </div>
+          {addingSection ? (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <input
+                autoFocus
+                value={sectionInput}
+                onChange={(e) => setSectionInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") commitSection(); if (e.key === "Escape") { setAddingSection(false); setSectionInput(""); } }}
+                onBlur={commitSection}
+                placeholder="Section name…"
                 style={{
-                  display: "inline-flex", alignItems: "center", gap: 4,
-                  fontSize: 10, fontWeight: 700, color: "#A8A29E",
-                  background: "none", border: "1px dashed #D1D5DB",
-                  borderRadius: 8, padding: "2px 8px", cursor: "pointer",
-                  letterSpacing: 0.5, marginBottom: 6, transition: "all 0.15s",
+                  fontSize: 11, fontWeight: 700, padding: "3px 10px",
+                  borderRadius: 8, border: "1.5px solid #2563EB",
+                  background: "#EFF6FF", color: "#2563EB", outline: "none", width: 140,
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563EB"; e.currentTarget.style.color = "#2563EB"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#D1D5DB"; e.currentTarget.style.color = "#A8A29E"; }}
-              >
-                <Plus size={10} /> SECTION
-              </button>
-            )
+              />
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingSection(true)}
+              title="Add a section heading to group tasks"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 700, color: "#A8A29E",
+                background: "none", border: "1px dashed #D1D5DB",
+                borderRadius: 8, padding: "2px 8px", cursor: "pointer",
+                letterSpacing: 0.5, marginBottom: 6, transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563EB"; e.currentTarget.style.color = "#2563EB"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#D1D5DB"; e.currentTarget.style.color = "#A8A29E"; }}
+            >
+              <Plus size={10} /> SECTION
+            </button>
           )}
         </div>
-        {doingCount > 0 && (
+        {pendingCount > 0 && (
           <button
             onClick={onDoneForToday}
-            title={`Carry ${doingCount} 'Doing' task${doingCount > 1 ? 's' : ''} to tomorrow`}
+            title={`Carry ${pendingCount} pending item${pendingCount > 1 ? 's' : ''} to tomorrow`}
             style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "6px 14px", borderRadius: 8, marginBottom: 6,
@@ -2081,7 +2869,7 @@ function DailyTodos({
             onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
           >
             Done For Today
-            <span style={{ background: "#F5F5F4", color: "#78716C", borderRadius: 10, padding: "2px 6px", fontSize: 10, fontWeight: 700 }}>{doingCount}</span>
+            <span style={{ background: "#F5F5F4", color: "#78716C", borderRadius: 10, padding: "2px 6px", fontSize: 10, fontWeight: 700 }}>{pendingCount}</span>
           </button>
         )}
       </div>
@@ -2192,9 +2980,14 @@ function DailyTodos({
 
           {/* ── Pending Chips ── */}
           {pendingChips.map((chip, i) => (
-            <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: "#2563EB" }}>
-              {chip}
-              <button onClick={() => removeChip(i)} style={{ color: "#93C5FD", fontSize: 14, lineHeight: 1, paddingLeft: 2 }}>×</button>
+            <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: "#2563EB" }}>
+              <span>{chip.text}</span>
+              {chip.subtasks && chip.subtasks.length > 0 && (
+                <span style={{ fontSize: 10, fontWeight: 700, background: "#DBEAFE", color: "#1E40AF", borderRadius: 10, padding: "1px 6px" }}>
+                  {chip.subtasks.length} subs
+                </span>
+              )}
+              <button onClick={() => removeChip(i)} style={{ color: "#93C5FD", fontSize: 14, lineHeight: 1, paddingLeft: 2, background: "none", border: "none", cursor: "pointer" }}>×</button>
             </div>
           ))}
 
@@ -2203,7 +2996,7 @@ function DailyTodos({
             <input
               ref={taskInputRef}
               type="text"
-              placeholder={`Assign Task… (type @ for employee)`}
+              placeholder="Assign Task… e.g. Events (Luma | MeetUp | WhatsApp) or type @"
               value={taskInput}
               onChange={handleTaskInputChange}
               onKeyDown={(e) => {
@@ -2274,7 +3067,7 @@ function DailyTodos({
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {currentList.map((item, index) => {
             const isSection = !!(item as any).isSection;
-            const chips = (item as any).chips as { text: string; status: Status }[] | undefined;
+            const chips = (item as any).chips as TaskChip[] | undefined;
             const employee = (item as any).employee as string | undefined;
             const overallStatus: Status = (item as any).status || "not_started";
             const isChipTask = chips && chips.length > 0;
@@ -2370,6 +3163,7 @@ function DailyTodos({
                   ...card,
                   padding: "12px 16px 10px",
                   position: "relative",
+                  zIndex: openSubtaskPopover?.id === item.id ? 50 : undefined,
                   marginLeft: hasSectionAbove ? 12 : 0,
                   borderLeft: `3px solid ${overallStatus === "done" ? "#16A34A" : overallStatus === "doing" ? "#F59E0B" : "#E7E5E4"}`,
                   transition: "all 0.2s",
@@ -2382,10 +3176,23 @@ function DailyTodos({
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {/* Chips */}
                     {chips!.map((chip, idx) => {
-                      const cs = chipStatusColor[chip.status];
+                      const hasSubtasks = !!(chip.subtasks && chip.subtasks.length > 0);
+                      const totalSub = hasSubtasks ? chip.subtasks!.length : 0;
+                      const doneSub = hasSubtasks ? chip.subtasks!.filter((st) => st.status === "done").length : 0;
+                      const doingSub = hasSubtasks ? chip.subtasks!.filter((st) => st.status === "doing").length : 0;
+                      const effectiveStatus: Status = hasSubtasks
+                        ? (chip.status === "done" || (totalSub > 0 && doneSub === totalSub)
+                            ? "done"
+                            : chip.status === "doing" || doneSub > 0 || doingSub > 0
+                              ? "doing"
+                              : "not_started")
+                        : chip.status;
+                      const cs = chipStatusColor[effectiveStatus];
                       const isEditingThis = editingChip?.id === item.id && editingChip?.idx === idx;
+                      const isOpenPopover = openSubtaskPopover?.id === item.id && openSubtaskPopover?.chipIdx === idx;
+
                       return (
-                        <div key={idx} style={{ display: "inline-flex", alignItems: "stretch" }}>
+                        <div key={idx} style={{ position: "relative", display: "inline-flex", alignItems: "stretch", zIndex: isOpenPopover ? 60 : undefined }}>
                           {isEditingThis ? (
                             <input
                               autoFocus
@@ -2402,26 +3209,78 @@ function DailyTodos({
                             />
                           ) : (
                             <>
-                              <button
-                                onClick={() => todoTab === "daily" ? onCycleSubChip(item.id, idx) : onCycleNoteChip(item.id, idx)}
-                                title="Click to cycle status · double-click text to rename"
+                              <div
+                                onClick={() => {
+                                  if (hasSubtasks) {
+                                    setOpenSubtaskPopover(isOpenPopover ? null : { id: item.id, chipIdx: idx });
+                                  } else {
+                                    todoTab === "daily" ? onCycleSubChip(item.id, idx) : onCycleNoteChip(item.id, idx);
+                                  }
+                                }}
                                 style={{
                                   display: "inline-flex", alignItems: "center", gap: 5,
                                   background: cs.bg, border: `1px solid ${cs.border}`,
                                   borderRadius: "20px 0 0 20px", padding: "4px 8px 4px 10px",
                                   fontSize: 12, fontWeight: 600, color: cs.text,
-                                  cursor: "pointer", transition: "all 0.2s",
+                                  cursor: "pointer", transition: "all 0.2s", userSelect: "none",
                                 }}
                               >
-                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: cs.dot, flexShrink: 0, ...(chip.status === "done" ? { boxShadow: `0 0 0 2px ${cs.dot}40` } : {}) }} />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    todoTab === "daily" ? onCycleSubChip(item.id, idx) : onCycleNoteChip(item.id, idx);
+                                  }}
+                                  title="Click to cycle: Not Started ➔ Doing ➔ Done"
+                                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center" }}
+                                >
+                                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: cs.dot, flexShrink: 0, ...(effectiveStatus === "done" ? { boxShadow: `0 0 0 2px ${cs.dot}40` } : effectiveStatus === "doing" ? { boxShadow: `0 0 0 2px ${cs.dot}40` } : {}) }} />
+                                </button>
                                 <span
-                                  style={{ textDecoration: chip.status === "done" ? "line-through" : "none" }}
+                                  style={{ textDecoration: effectiveStatus === "done" ? "line-through" : "none" }}
                                   onDoubleClick={(e) => { e.stopPropagation(); setEditingChip({ id: item.id, idx }); setEditingChipText(chip.text); }}
                                   title="Double-click to rename"
                                 >
                                   {chip.text}
                                 </span>
-                              </button>
+                                {hasSubtasks ? (
+                                  <span
+                                    style={{
+                                      display: "inline-flex", alignItems: "center", gap: 2,
+                                      fontSize: 10, fontWeight: 700,
+                                      background: effectiveStatus === "done" ? "#DCFCE7" : "#E2E8F0",
+                                      color: effectiveStatus === "done" ? "#15803D" : "#475569",
+                                      padding: "1px 5px", borderRadius: 8, marginLeft: 2,
+                                    }}
+                                  >
+                                    {doneSub}/{totalSub}
+                                    <ChevronDown size={10} style={{ transform: isOpenPopover ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setOpenSubtaskPopover(isOpenPopover ? null : { id: item.id, chipIdx: idx });
+                                    }}
+                                    title="Add sub-tasks to this item"
+                                    style={{
+                                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                      border: "none", background: "rgba(0,0,0,0.05)",
+                                      padding: "2px 4px", cursor: "pointer", color: cs.text,
+                                      borderRadius: 6, marginLeft: 3, transition: "all 0.15s",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = "rgba(0,0,0,0.12)";
+                                      e.currentTarget.style.color = "#1E40AF";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = "rgba(0,0,0,0.05)";
+                                      e.currentTarget.style.color = cs.text;
+                                    }}
+                                  >
+                                    <Plus size={10} strokeWidth={2.5} />
+                                  </button>
+                                )}
+                              </div>
                               <button
                                 onClick={(e) => { e.stopPropagation(); onDeleteChip(item.id, todoTab, idx); }}
                                 title="Remove this task"
@@ -2443,6 +3302,189 @@ function DailyTodos({
                                 ×
                               </button>
                             </>
+                          )}
+
+                          {/* ── Subtask Popover Drawer ── */}
+                          {isOpenPopover && (
+                            <div
+                              ref={popoverRef}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                position: "absolute",
+                                top: "calc(100% + 6px)",
+                                left: 0,
+                                zIndex: 300,
+                                minWidth: 230,
+                                maxWidth: 320,
+                                background: "#FFFFFF",
+                                borderRadius: 12,
+                                border: "1px solid #E5E7EB",
+                                boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08)",
+                                padding: "10px 12px",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 8,
+                              }}
+                            >
+                              {/* Popover Header */}
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #F3F4F6", paddingBottom: 6 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: "#1F2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {chip.text}
+                                  </span>
+                                  {totalSub > 0 && (
+                                    <span style={{ fontSize: 10, fontWeight: 700, background: cs.bg, color: cs.text, border: `1px solid ${cs.border}`, borderRadius: 10, padding: "1px 6px", flexShrink: 0 }}>
+                                      {doneSub}/{totalSub}
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => setOpenSubtaskPopover(null)}
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: "#9CA3AF", padding: 2, display: "flex", flexShrink: 0 }}
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+
+                              {/* Subtasks List */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 180, overflowY: "auto" }}>
+                                {totalSub === 0 && (
+                                  <div style={{ fontSize: 11, color: "#9CA3AF", padding: "4px 2px", fontStyle: "italic" }}>
+                                    No sub-tasks yet. Add one below:
+                                  </div>
+                                )}
+                                {(chip.subtasks || []).map((st, sIdx) => {
+                                  const isStDone = st.status === "done";
+                                  const isStDoing = st.status === "doing";
+                                  const isEditingThisSt = editingSubtask?.id === item.id && editingSubtask?.chipIdx === idx && editingSubtask?.subIdx === sIdx;
+
+                                  return (
+                                    <div
+                                      key={st.id || sIdx}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        padding: "4px 6px",
+                                        borderRadius: 6,
+                                        background: isStDone ? "#F0FDF4" : isStDoing ? "#FFFBEB" : "transparent",
+                                        transition: "background 0.1s",
+                                      }}
+                                    >
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                                        <button
+                                          onClick={() => onToggleSubtask(item.id, todoTab, idx, sIdx)}
+                                          title={`Status: ${SLABEL[st.status || "not_started"]}. Click to cycle: Not Started ➔ Doing ➔ Done`}
+                                          style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", flexShrink: 0 }}
+                                        >
+                                          {isStDone ? (
+                                            <CheckCircle2 size={14} color="#16A34A" />
+                                          ) : isStDoing ? (
+                                            <Circle size={14} color="#F59E0B" fill="#F59E0B" />
+                                          ) : (
+                                            <Circle size={14} color="#D1D5DB" />
+                                          )}
+                                        </button>
+                                        {isEditingThisSt ? (
+                                          <input
+                                            autoFocus
+                                            value={editingSubtaskText}
+                                            onChange={(e) => setEditingSubtaskText(e.target.value)}
+                                            onBlur={() => {
+                                              if (editingSubtaskText.trim()) {
+                                                onEditSubtask(item.id, todoTab, idx, sIdx, editingSubtaskText.trim());
+                                              }
+                                              setEditingSubtask(null);
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter") {
+                                                if (editingSubtaskText.trim()) {
+                                                  onEditSubtask(item.id, todoTab, idx, sIdx, editingSubtaskText.trim());
+                                                }
+                                                setEditingSubtask(null);
+                                              }
+                                              if (e.key === "Escape") setEditingSubtask(null);
+                                            }}
+                                            style={{
+                                              fontSize: 12,
+                                              fontWeight: 500,
+                                              padding: "1px 4px",
+                                              borderRadius: 4,
+                                              border: "1px solid #2563EB",
+                                              outline: "none",
+                                              width: "100%",
+                                            }}
+                                          />
+                                        ) : (
+                                          <span
+                                            onDoubleClick={() => {
+                                              setEditingSubtask({ id: item.id, chipIdx: idx, subIdx: sIdx });
+                                              setEditingSubtaskText(st.text);
+                                            }}
+                                            title="Double-click to rename"
+                                            style={{
+                                              fontSize: 12,
+                                              fontWeight: 500,
+                                              color: isStDone ? "#9CA3AF" : "#374151",
+                                              textDecoration: isStDone ? "line-through" : "none",
+                                              cursor: "pointer",
+                                              overflow: "hidden",
+                                              textOverflow: "ellipsis",
+                                              whiteSpace: "nowrap",
+                                            }}
+                                          >
+                                            {st.text}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <button
+                                        onClick={() => onDeleteSubtask(item.id, todoTab, idx, sIdx)}
+                                        title="Delete sub-task"
+                                        style={{
+                                          background: "none",
+                                          border: "none",
+                                          color: "#D1D5DB",
+                                          cursor: "pointer",
+                                          padding: "2px 4px",
+                                          fontSize: 12,
+                                          lineHeight: 1,
+                                          borderRadius: 4,
+                                        }}
+                                        onMouseEnter={(e) => (e.currentTarget.style.color = "#EF4444")}
+                                        onMouseLeave={(e) => (e.currentTarget.style.color = "#D1D5DB")}
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Inline Add Subtask Input */}
+                              <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 6 }}>
+                                <input
+                                  placeholder="+ Add sub-task (Enter to save)"
+                                  value={openSubtaskPopover?.id === item.id && openSubtaskPopover?.chipIdx === idx ? popoverNewSubText : ""}
+                                  onChange={(e) => setPopoverNewSubText(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" && popoverNewSubText.trim()) {
+                                      e.preventDefault();
+                                      onAddSubtaskToChip(item.id, todoTab, idx, popoverNewSubText.trim());
+                                      setPopoverNewSubText("");
+                                    }
+                                  }}
+                                  style={{
+                                    width: "100%",
+                                    fontSize: 11,
+                                    padding: "4px 8px",
+                                    borderRadius: 6,
+                                    border: "1px solid #E5E7EB",
+                                    outline: "none",
+                                    background: "#FAFAFA",
+                                  }}
+                                />
+                              </div>
+                            </div>
                           )}
                         </div>
                       );

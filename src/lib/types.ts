@@ -16,13 +16,26 @@ export interface TodoItem {
   status: Status;
 }
 
+export interface SubTaskItem {
+  id?: string;
+  text: string;
+  status: Status;
+}
+
+export interface TaskChip {
+  id?: string;
+  text: string;
+  status: Status;
+  subtasks?: SubTaskItem[];
+}
+
 export interface SubTask {
   id: string;
   parentId: string; // mainTask id
   text: string;
   status: Status;
   employee?: string;
-  chips?: { text: string; status: Status }[];
+  chips?: TaskChip[];
   isSection?: boolean; // when true, renders as a named category heading, not a task
 }
 
@@ -42,7 +55,7 @@ export interface ManagerNote {
   status: Status;
   timestamp: number;
   employee?: string;
-  chips?: { text: string; status: Status }[];
+  chips?: TaskChip[];
 }
 
 export interface Meeting {
