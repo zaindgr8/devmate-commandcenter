@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
   Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat
 } from "lucide-react";
-import { loadState, saveState, createDayData, logout, calculateStreaks } from "@/lib/store";
+import { loadState, saveState, createDayData, logout, calculateStreaks, getToday } from "@/lib/store";
 import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
@@ -390,12 +390,12 @@ function extractEventsFromTasks(
   }[] = [];
 
   const isEventKeyword = (str?: string) =>
-    !!str && (/@events?(?:self|join)?\b/i.test(str) || /\bevents?(?:self|join)?\b/i.test(str) || /\b(luma|meetup|webinar)\b/i.test(str));
+    !!str && (/@events?\b/i.test(str) || /\b(luma|meetup|webinar)\b/i.test(str));
 
   const isEventRow = (str?: string) => {
     if (!str) return false;
     const s = str.toLowerCase().replace(/^@/, "").trim();
-    return s === "events" || s === "event" || s === "eventsself" || s === "eventsjoin" || s === "ours" || s === "imp";
+    return s === "events" || s === "event" || s === "ours" || s === "imp";
   };
 
   const determineCategory = (text: string, rowText: string): EventCategory => {
@@ -565,12 +565,15 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
   if (!state) return null;
   const day = state.days[state.currentDate] || createDayData(state.currentDate);
-  const isToday = state.currentDate === new Date().toISOString().slice(0, 10);
+  const isToday = state.currentDate === getToday();
 
   const go = (off: number) => {
     const d = new Date(state.currentDate + "T12:00:00");
     d.setDate(d.getDate() + off);
-    const nd = d.toISOString().slice(0, 10);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const nd = `${year}-${month}-${day}`;
     const ns = { ...state, currentDate: nd };
     if (!ns.days[nd]) ns.days[nd] = createDayData(nd);
     save(ns); // no streak recalc needed on navigation
@@ -584,7 +587,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     // Compute next day key
     const nextDate = new Date(todayKey + "T12:00:00");
     nextDate.setDate(nextDate.getDate() + 1);
-    const nextKey = nextDate.toISOString().slice(0, 10);
+    const nYear = nextDate.getFullYear();
+    const nMonth = String(nextDate.getMonth() + 1).padStart(2, "0");
+    const nDay = String(nextDate.getDate()).padStart(2, "0");
+    const nextKey = `${nYear}-${nMonth}-${nDay}`;
 
     const prefix = "carried_" + Date.now() + "_";
 
@@ -3116,9 +3122,8 @@ function MeetingsAndEventsSection({
               {/* Meeting Items List */}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {filteredMeetings.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "18px 0", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 10 }}>
-                    <Calendar size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
-                    <p style={{ fontSize: 11, margin: 0 }}>
+                  <div style={{ textAlign: "center", padding: "10px 8px", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 8 }}>
+                    <p style={{ fontSize: 11, margin: 0, fontWeight: 500 }}>
                       {dateScopedMeetings.length === 0
                         ? (dateScope === "today" ? "No meetings scheduled for today." : "No upcoming meetings.")
                         : "No meetings match this filter."}
@@ -3745,9 +3750,8 @@ function MeetingsAndEventsSection({
               {/* Event Items List */}
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {filteredEvents.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "18px 0", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 10 }}>
-                    <Calendar size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
-                    <p style={{ fontSize: 11, margin: 0 }}>
+                  <div style={{ textAlign: "center", padding: "10px 8px", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 8 }}>
+                    <p style={{ fontSize: 11, margin: 0, fontWeight: 500 }}>
                       {dateScopedEvents.length === 0
                         ? (dateScope === "today" ? "No events scheduled for today." : "No upcoming events.")
                         : "No events in this category."}
@@ -3756,7 +3760,7 @@ function MeetingsAndEventsSection({
                       <button
                         onClick={() => setDateScope("all")}
                         style={{
-                          marginTop: 6,
+                          marginTop: 4,
                           fontSize: 11,
                           fontWeight: 600,
                           color: "#7C3AED",
@@ -4225,6 +4229,8 @@ function EmployeeTasksSection({
     .map(emp => ({ emp, tasks: getTasksForEmployee(emp.name) }))
     .filter(item => item.tasks.length > 0);
 
+  if (activeEmployees.length === 0) return null;
+
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: sectionOpen ? 16 : 0 }}>
@@ -4382,7 +4388,7 @@ function GoalsOverviewSection({
   onDeleteGoal,
   onReorderGoals,
 }: GoalsOverviewSectionProps) {
-  const [goalsOpen, setGoalsOpen] = useState(true);
+  const [goalsOpen, setGoalsOpen] = useState(false);
   const [filter, setFilter] = useState<"all" | "in_progress" | "completed">("all");
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState({ title: "", target: "", current: "", unit: "", color: GOAL_COLORS[0] });
