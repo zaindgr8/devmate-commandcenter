@@ -884,44 +884,70 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     if (!window.confirm("Remove this meeting?")) return;
 
     const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+    const updatedDays = { ...state.days };
+    updatedDays[state.currentDate] = { ...day };
 
     if (isTaskMeeting) {
-      setDay((d) => ({
-        ...d,
-        subTasks: d.subTasks
-          .map((s) => {
-            if (s.id !== taskId) return s;
-            if (chipIdx >= 0 && s.chips) {
-              const nc = s.chips.filter((_, i) => i !== chipIdx);
-              return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
-            } else {
-              return { ...s, text: "" };
-            }
-          })
-          .filter((s) => {
-            if (s.isSection) return true;
-            if (s.chips && s.chips.length > 0) return true;
-            return s.text.trim().length > 0;
-          }),
-        managerNotes: d.managerNotes
-          .map((n) => {
-            if (n.id !== taskId) return n;
-            if (chipIdx >= 0 && n.chips) {
-              const nc = n.chips.filter((_, i) => i !== chipIdx);
-              return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
-            } else {
-              return { ...n, content: "" };
-            }
-          })
-          .filter((n) => {
-            if (n.chips && n.chips.length > 0) return true;
-            return n.content.trim().length > 0;
-          }),
-      }));
+      let found = false;
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        let dayModified = false;
+        let newSubTasks = dVal.subTasks || [];
+        let newNotes = dVal.managerNotes || [];
+
+        if (newSubTasks.some((s) => s.id === taskId)) {
+          newSubTasks = newSubTasks
+            .map((s) => {
+              if (s.id !== taskId) return s;
+              if (chipIdx >= 0 && s.chips) {
+                const nc = s.chips.filter((_, i) => i !== chipIdx);
+                return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
+              } else {
+                return { ...s, text: "" };
+              }
+            })
+            .filter((s) => {
+              if (s.isSection) return true;
+              if (s.chips && s.chips.length > 0) return true;
+              return s.text.trim().length > 0;
+            });
+          dayModified = true;
+        }
+
+        if (newNotes.some((n) => n.id === taskId)) {
+          newNotes = newNotes
+            .map((n) => {
+              if (n.id !== taskId) return n;
+              if (chipIdx >= 0 && n.chips) {
+                const nc = n.chips.filter((_, i) => i !== chipIdx);
+                return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
+              } else {
+                return { ...n, content: "" };
+              }
+            })
+            .filter((n) => {
+              if (n.chips && n.chips.length > 0) return true;
+              return n.content.trim().length > 0;
+            });
+          dayModified = true;
+        }
+
+        if (dayModified) {
+          updatedDays[dKey] = {
+            ...dVal,
+            subTasks: newSubTasks,
+            managerNotes: newNotes,
+          };
+          found = true;
+        }
+      }
+
+      if (found) {
+        save({ ...state, days: updatedDays });
+      }
       return;
     }
 
-    const updatedDays = { ...state.days };
     let found = false;
     for (const [dKey, dVal] of Object.entries(updatedDays)) {
       if (dVal.meetings && dVal.meetings.some((m) => m.id === id)) {
@@ -939,43 +965,69 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
   const cycleMeetingStatus = (id: string) => {
     const { isTaskMeeting, taskId, chipIdx } = parseMeetingId(id);
+    const updatedDays = { ...state.days };
+    updatedDays[state.currentDate] = { ...day };
 
     if (isTaskMeeting) {
-      setDay((d) => ({
-        ...d,
-        subTasks: d.subTasks.map((s) => {
-          if (s.id !== taskId) return s;
-          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
-            const newChips = s.chips.map((c, i) => {
-              if (i !== chipIdx) return c;
-              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
-              return { ...c, status: nextStatus };
-            });
-            return { ...s, chips: newChips };
-          } else {
-            return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
-          }
-        }),
-        managerNotes: d.managerNotes.map((n) => {
-          if (n.id !== taskId) return n;
-          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
-            const newChips = n.chips.map((c, i) => {
-              if (i !== chipIdx) return c;
-              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
-              return { ...c, status: nextStatus };
-            });
-            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
-            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
-            return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-          } else {
-            return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
-          }
-        }),
-      }));
+      let found = false;
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        let dayModified = false;
+        let newSubTasks = dVal.subTasks || [];
+        let newNotes = dVal.managerNotes || [];
+
+        if (newSubTasks.some((s) => s.id === taskId)) {
+          newSubTasks = newSubTasks.map((s) => {
+            if (s.id !== taskId) return s;
+            if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+              const newChips = s.chips.map((c, i) => {
+                if (i !== chipIdx) return c;
+                const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+                return { ...c, status: nextStatus };
+              });
+              return { ...s, chips: newChips };
+            } else {
+              return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (newNotes.some((n) => n.id === taskId)) {
+          newNotes = newNotes.map((n) => {
+            if (n.id !== taskId) return n;
+            if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+              const newChips = n.chips.map((c, i) => {
+                if (i !== chipIdx) return c;
+                const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+                return { ...c, status: nextStatus };
+              });
+              const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
+              const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
+              return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+            } else {
+              return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (dayModified) {
+          updatedDays[dKey] = {
+            ...dVal,
+            subTasks: newSubTasks,
+            managerNotes: newNotes,
+          };
+          found = true;
+        }
+      }
+
+      if (found) {
+        save({ ...state, days: updatedDays });
+      }
       return;
     }
 
-    const updatedDays = { ...state.days };
     let found = false;
     for (const [dKey, dVal] of Object.entries(updatedDays)) {
       if (dVal.meetings && dVal.meetings.some((m) => m.id === id)) {
@@ -1188,45 +1240,71 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     if (!window.confirm("Remove this event?")) return;
 
     const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
+    const updatedDays = { ...state.days };
+    updatedDays[state.currentDate] = { ...day };
 
     if (isTaskEvent) {
-      setDay((d) => ({
-        ...d,
-        subTasks: d.subTasks
-          .map((s) => {
-            if (s.id !== taskId) return s;
-            if (chipIdx >= 0 && s.chips) {
-              const nc = s.chips.filter((_, i) => i !== chipIdx);
-              return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
-            } else {
-              return { ...s, text: "" };
-            }
-          })
-          .filter((s) => {
-            if (s.isSection) return true;
-            if (s.chips && s.chips.length > 0) return true;
-            return s.text.trim().length > 0;
-          }),
-        managerNotes: d.managerNotes
-          .map((n) => {
-            if (n.id !== taskId) return n;
-            if (chipIdx >= 0 && n.chips) {
-              const nc = n.chips.filter((_, i) => i !== chipIdx);
-              return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
-            } else {
-              return { ...n, content: "" };
-            }
-          })
-          .filter((n) => {
-            if (n.chips && n.chips.length > 0) return true;
-            return n.content.trim().length > 0;
-          }),
-      }));
+      let found = false;
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        let dayModified = false;
+        let newSubTasks = dVal.subTasks || [];
+        let newNotes = dVal.managerNotes || [];
+
+        if (newSubTasks.some((s) => s.id === taskId)) {
+          newSubTasks = newSubTasks
+            .map((s) => {
+              if (s.id !== taskId) return s;
+              if (chipIdx >= 0 && s.chips) {
+                const nc = s.chips.filter((_, i) => i !== chipIdx);
+                return { ...s, chips: nc, text: nc.map((c) => c.text).join(", ") };
+              } else {
+                return { ...s, text: "" };
+              }
+            })
+            .filter((s) => {
+              if (s.isSection) return true;
+              if (s.chips && s.chips.length > 0) return true;
+              return s.text.trim().length > 0;
+            });
+          dayModified = true;
+        }
+
+        if (newNotes.some((n) => n.id === taskId)) {
+          newNotes = newNotes
+            .map((n) => {
+              if (n.id !== taskId) return n;
+              if (chipIdx >= 0 && n.chips) {
+                const nc = n.chips.filter((_, i) => i !== chipIdx);
+                return { ...n, chips: nc, content: nc.map((c) => c.text).join(", ") };
+              } else {
+                return { ...n, content: "" };
+              }
+            })
+            .filter((n) => {
+              if (n.chips && n.chips.length > 0) return true;
+              return n.content.trim().length > 0;
+            });
+          dayModified = true;
+        }
+
+        if (dayModified) {
+          updatedDays[dKey] = {
+            ...dVal,
+            subTasks: newSubTasks,
+            managerNotes: newNotes,
+          };
+          found = true;
+        }
+      }
+
+      if (found) {
+        save({ ...state, days: updatedDays });
+      }
       return;
     }
 
     const origRecId = id.startsWith("rec_") ? id.slice("rec_".length) : id;
-    const updatedDays = { ...state.days };
     for (const [dKey, dVal] of Object.entries(updatedDays)) {
       if (dVal.events && dVal.events.some((e) => e.id === id || e.id === origRecId)) {
         updatedDays[dKey] = {
@@ -1244,44 +1322,70 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
   const cycleEventStatus = (id: string) => {
     const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
+    const updatedDays = { ...state.days };
+    updatedDays[state.currentDate] = { ...day };
 
     if (isTaskEvent) {
-      setDay((d) => ({
-        ...d,
-        subTasks: d.subTasks.map((s) => {
-          if (s.id !== taskId) return s;
-          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
-            const newChips = s.chips.map((c, i) => {
-              if (i !== chipIdx) return c;
-              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
-              return { ...c, status: nextStatus };
-            });
-            return { ...s, chips: newChips };
-          } else {
-            return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
-          }
-        }),
-        managerNotes: d.managerNotes.map((n) => {
-          if (n.id !== taskId) return n;
-          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
-            const newChips = n.chips.map((c, i) => {
-              if (i !== chipIdx) return c;
-              const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
-              return { ...c, status: nextStatus };
-            });
-            const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
-            const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
-            return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
-          } else {
-            return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
-          }
-        }),
-      }));
+      let found = false;
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        let dayModified = false;
+        let newSubTasks = dVal.subTasks || [];
+        let newNotes = dVal.managerNotes || [];
+
+        if (newSubTasks.some((s) => s.id === taskId)) {
+          newSubTasks = newSubTasks.map((s) => {
+            if (s.id !== taskId) return s;
+            if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+              const newChips = s.chips.map((c, i) => {
+                if (i !== chipIdx) return c;
+                const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+                return { ...c, status: nextStatus };
+              });
+              return { ...s, chips: newChips };
+            } else {
+              return { ...s, status: SCYCLE[(SCYCLE.indexOf(s.status) + 1) % 3] };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (newNotes.some((n) => n.id === taskId)) {
+          newNotes = newNotes.map((n) => {
+            if (n.id !== taskId) return n;
+            if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+              const newChips = n.chips.map((c, i) => {
+                if (i !== chipIdx) return c;
+                const nextStatus = SCYCLE[(SCYCLE.indexOf(c.status) + 1) % 3];
+                return { ...c, status: nextStatus };
+              });
+              const allDone = newChips.length > 0 && newChips.every((c) => c.status === "done");
+              const anyDoing = newChips.some((c) => c.status === "doing" || c.status === "done");
+              return { ...n, chips: newChips, status: (allDone ? "done" : anyDoing ? "doing" : "not_started") as Status };
+            } else {
+              return { ...n, status: SCYCLE[(SCYCLE.indexOf(n.status) + 1) % 3] };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (dayModified) {
+          updatedDays[dKey] = {
+            ...dVal,
+            subTasks: newSubTasks,
+            managerNotes: newNotes,
+          };
+          found = true;
+        }
+      }
+
+      if (found) {
+        save({ ...state, days: updatedDays });
+      }
       return;
     }
 
     const origRecId = id.startsWith("rec_") ? id.slice("rec_".length) : id;
-    const updatedDays = { ...state.days };
     let found = false;
 
     for (const [dKey, dVal] of Object.entries(updatedDays)) {
@@ -1301,22 +1405,19 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       }
     }
 
-    if (!found && id.startsWith("rec_")) {
-      const template = (state.recurringEvents || []).find((r) => r.id === origRecId);
-      if (template) {
-        const nextStatus: Status = "doing";
-        const targetDay = updatedDays[state.currentDate] || createDayData(state.currentDate);
-        updatedDays[state.currentDate] = {
-          ...targetDay,
-          events: [...(targetDay.events || []), { ...template, id, date: state.currentDate, status: nextStatus }],
-        };
-        found = true;
+    const updatedRec = (state.recurringEvents || []).map((r) => {
+      if (r.id === origRecId || r.id === id) {
+        const idx = SCYCLE.indexOf(r.status);
+        return { ...r, status: SCYCLE[(idx + 1) % 3] };
       }
-    }
+      return r;
+    });
 
-    if (found) {
-      save({ ...state, days: updatedDays });
-    }
+    save({
+      ...state,
+      recurringEvents: updatedRec,
+      days: updatedDays,
+    });
   };
 
   const editEvent = (
@@ -1333,33 +1434,61 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     const { isTaskEvent, taskId, chipIdx } = parseEventId(id);
 
     if (isTaskEvent) {
-      setDay((d) => ({
-        ...d,
-        subTasks: d.subTasks.map((s) => {
-          if (s.id !== taskId) return s;
+      const updatedDays = { ...state.days };
+      updatedDays[state.currentDate] = { ...day };
+      let found = false;
+
+      for (const [dKey, dVal] of Object.entries(updatedDays)) {
+        if (!dVal) continue;
+        let dayModified = false;
+        let newSubTasks = dVal.subTasks || [];
+        let newNotes = dVal.managerNotes || [];
+
+        if (newSubTasks.some((s) => s.id === taskId)) {
           const newText = updates.title.trim();
-          if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
-            const newChips = s.chips.map((c, i) =>
-              i === chipIdx ? { ...c, text: newText } : c
-            );
-            return { ...s, chips: newChips, text: newChips.map((c) => c.text).join(", ") };
-          } else {
-            return { ...s, text: newText };
-          }
-        }),
-        managerNotes: d.managerNotes.map((n) => {
-          if (n.id !== taskId) return n;
+          newSubTasks = newSubTasks.map((s) => {
+            if (s.id !== taskId) return s;
+            if (chipIdx >= 0 && s.chips && s.chips[chipIdx]) {
+              const newChips = s.chips.map((c, i) =>
+                i === chipIdx ? { ...c, text: newText } : c
+              );
+              return { ...s, chips: newChips, text: newChips.map((c) => c.text).join(", ") };
+            } else {
+              return { ...s, text: newText };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (newNotes.some((n) => n.id === taskId)) {
           const newText = updates.title.trim();
-          if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
-            const newChips = n.chips.map((c, i) =>
-              i === chipIdx ? { ...c, text: newText } : c
-            );
-            return { ...n, chips: newChips, content: newChips.map((c) => c.text).join(", ") };
-          } else {
-            return { ...n, content: newText };
-          }
-        }),
-      }));
+          newNotes = newNotes.map((n) => {
+            if (n.id !== taskId) return n;
+            if (chipIdx >= 0 && n.chips && n.chips[chipIdx]) {
+              const newChips = n.chips.map((c, i) =>
+                i === chipIdx ? { ...c, text: newText } : c
+              );
+              return { ...n, chips: newChips, content: newChips.map((c) => c.text).join(", ") };
+            } else {
+              return { ...n, content: newText };
+            }
+          });
+          dayModified = true;
+        }
+
+        if (dayModified) {
+          updatedDays[dKey] = {
+            ...dVal,
+            subTasks: newSubTasks,
+            managerNotes: newNotes,
+          };
+          found = true;
+        }
+      }
+
+      if (found) {
+        save({ ...state, days: updatedDays });
+      }
       return;
     }
 
