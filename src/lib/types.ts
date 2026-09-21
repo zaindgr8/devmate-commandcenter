@@ -67,13 +67,13 @@ export interface Meeting {
   status: Status; // "not_started" | "doing" | "done"
 }
 
-export type EventCategory = "Ours" | "Imp";
+export type EventCategory = "Ours" | "Others" | "Imp";
 export type EventRecurrence = "one_time" | "weekly";
 
 export interface EventItem {
   id: string;
   title: string;
-  category: EventCategory; // "Ours" | "Imp"
+  category: EventCategory; // "Ours" | "Others"
   time?: string;
   location?: string;
   date?: string; // e.g. "2026-09-11"

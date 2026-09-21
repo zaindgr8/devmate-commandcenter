@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat
+  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks, getToday } from "@/lib/store";
 import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
@@ -268,6 +268,58 @@ function parseMeetingTime(text: string): { cleanText: string; time: string } {
   };
 }
 
+export function parseTimeToMinutes(timeStr?: string): number {
+  if (!timeStr) return 9999;
+  const str = timeStr.trim().toLowerCase();
+  if (!str || str === "scheduled") return 9999;
+
+  const isPm = /\bpm\b|pm/i.test(str);
+  const isAm = /\bam\b|am/i.test(str);
+
+  let hour = 0;
+  let min = 0;
+
+  if (str.includes(":")) {
+    const parts = str.split(":");
+    hour = parseInt(parts[0].replace(/[^\d]/g, ""), 10);
+    min = parseInt(parts[1].replace(/[^\d]/g, ""), 10) || 0;
+  } else {
+    const numOnly = str.replace(/[^\d]/g, "");
+    if (numOnly.length === 3) {
+      hour = parseInt(numOnly[0], 10);
+      min = parseInt(numOnly.slice(1), 10);
+    } else if (numOnly.length === 4) {
+      hour = parseInt(numOnly.slice(0, 2), 10);
+      min = parseInt(numOnly.slice(2), 10);
+    } else if (numOnly.length >= 1 && numOnly.length <= 2) {
+      hour = parseInt(numOnly, 10);
+      min = 0;
+    } else {
+      return 9999;
+    }
+  }
+
+  if (isNaN(hour) || isNaN(min)) return 9999;
+
+  if (isPm) {
+    if (hour < 12) hour += 12;
+  } else if (isAm) {
+    if (hour === 12) hour = 0;
+  } else {
+    // If no explicit AM/PM:
+    // Hours 1..6 are typically afternoon/PM meetings (1pm to 6pm)
+    // Hours 7..11 are morning/AM meetings (7am to 11am)
+    // Hour 12 is 12pm (noon)
+    // Hour > 12 is already 24-hour time
+    if (hour >= 1 && hour <= 6) {
+      hour += 12;
+    }
+  }
+
+  return hour * 60 + min;
+}
+
+
 function extractMeetingsFromTasks(
   subTasks: SubTask[],
   managerNotes: ManagerNote[]
@@ -395,13 +447,13 @@ function extractEventsFromTasks(
   const isEventRow = (str?: string) => {
     if (!str) return false;
     const s = str.toLowerCase().replace(/^@/, "").trim();
-    return s === "events" || s === "event" || s === "ours" || s === "imp";
+    return s === "events" || s === "event" || s === "ours" || s === "imp" || s === "others";
   };
 
   const determineCategory = (text: string, rowText: string): EventCategory => {
     const combined = (text + " " + rowText).toLowerCase();
-    if (combined.includes("eventsjoin") || combined.includes("imp") || combined.includes("important") || combined.includes("join")) {
-      return "Imp";
+    if (combined.includes("eventsjoin") || combined.includes("imp") || combined.includes("important") || combined.includes("others") || combined.includes("other") || combined.includes("join")) {
+      return "Others";
     }
     return "Ours";
   };
@@ -1598,7 +1650,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const navBtn = (active: boolean): React.CSSProperties => ({ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 500, background: active ? "#EFF6FF" : "transparent", color: active ? "#2563EB" : "#78716C", transition: "all 0.15s", textAlign: "left" });
   const card: React.CSSProperties = { background: "#fff", borderRadius: 12, border: "1px solid #F0EEEC", boxShadow: "0 1px 2px rgba(28,25,23,0.04)" };
   const gridCols = "130px 1fr 220px 30px";
-  const inp: React.CSSProperties = { fontSize: 12, padding: "5px 8px", borderRadius: 8, background: "#FAFAF9", border: "1px solid #E7E5E4", color: "#1C1917" };
+  const inp: React.CSSProperties = { fontSize: 12, padding: "5px 8px", borderRadius: 8, background: "#FAFAF9", border: "1px solid #E7E5E4", color: "#1C1917", boxSizing: "border-box", outline: "none" };
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#FAFAF9" }}>
@@ -2265,11 +2317,13 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     });
 
                     const allMeetings = Array.from(meetingMap.values()).sort((a, b) => {
-                      const dateA = a.date || "";
-                      const dateB = b.date || "";
-                      if (dateA === state.currentDate && dateB !== state.currentDate) return -1;
-                      if (dateB === state.currentDate && dateA !== state.currentDate) return 1;
-                      return dateA.localeCompare(dateB);
+                      const dateA = a.date || state.currentDate;
+                      const dateB = b.date || state.currentDate;
+                      if (dateA !== dateB) return dateA.localeCompare(dateB);
+                      const timeA = parseTimeToMinutes(a.time);
+                      const timeB = parseTimeToMinutes(b.time);
+                      if (timeA !== timeB) return timeA - timeB;
+                      return (a.projectId || "").localeCompare(b.projectId || "");
                     });
 
                     const eventMap = new Map<string, EventItem>();
@@ -2315,11 +2369,27 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     });
 
                     const allEvents = Array.from(eventMap.values()).sort((a, b) => {
-                      const dateA = a.date || "";
-                      const dateB = b.date || "";
-                      if (dateA === state.currentDate && dateB !== state.currentDate) return -1;
-                      if (dateB === state.currentDate && dateA !== state.currentDate) return 1;
-                      return dateA.localeCompare(dateB);
+                      const isRecA = a.recurrence === "weekly" ? 1 : 0;
+                      const isRecB = b.recurrence === "weekly" ? 1 : 0;
+                      if (isRecA !== isRecB) return isRecB - isRecA; // recurring events on top
+
+                      if (isRecA && isRecB) {
+                        const dayA = typeof a.recurringDay === "number" ? a.recurringDay : (a.date ? new Date(a.date + "T12:00:00").getDay() : 0);
+                        const dayB = typeof b.recurringDay === "number" ? b.recurringDay : (b.date ? new Date(b.date + "T12:00:00").getDay() : 0);
+                        if (dayA !== dayB) return dayA - dayB;
+                        const timeA = parseTimeToMinutes(a.time);
+                        const timeB = parseTimeToMinutes(b.time);
+                        if (timeA !== timeB) return timeA - timeB;
+                        return (a.title || "").localeCompare(b.title || "");
+                      }
+
+                      const dateA = a.date || state.currentDate;
+                      const dateB = b.date || state.currentDate;
+                      if (dateA !== dateB) return dateA.localeCompare(dateB);
+                      const timeA = parseTimeToMinutes(a.time);
+                      const timeB = parseTimeToMinutes(b.time);
+                      if (timeA !== timeB) return timeA - timeB;
+                      return (a.title || "").localeCompare(b.title || "");
                     });
                     return (
                       <MeetingsAndEventsSection
@@ -2394,6 +2464,26 @@ function getDayName(dStr?: string) {
   }
 }
 
+function getDayShort(dStr?: string) {
+  if (!dStr) return "";
+  try {
+    const d = new Date(dStr + "T12:00:00");
+    return isNaN(d.getTime()) ? "" : DAYS_OF_WEEK_SHORT[d.getDay()];
+  } catch {
+    return "";
+  }
+}
+
+function getRecurringDayLabel(evt: EventItem) {
+  let dayShort = "";
+  if (typeof evt.recurringDay === "number" && evt.recurringDay >= 0 && evt.recurringDay < 7) {
+    dayShort = DAYS_OF_WEEK_SHORT[evt.recurringDay];
+  } else if (evt.date) {
+    dayShort = getDayShort(evt.date);
+  }
+  return dayShort ? `${dayShort} (Re-Occuring)` : "Re-Occuring";
+}
+
 function formatDateDisplay(dStr?: string) {
   if (!dStr) return "";
   try {
@@ -2441,23 +2531,19 @@ function MeetingsAndEventsSection({
   onCycleEventStatus,
   onEditEvent,
 }: MeetingsAndEventsSectionProps) {
-  // Main view switcher
-  // Main view switcher
-  const [viewMode, setViewMode] = useState<"all" | "meetings" | "events" | "events_ours" | "events_imp">("all");
-
   // Tracker collapse toggle state
   const [trackerOpen, setTrackerOpen] = useState(true);
 
-  // Date scope filter (default: "today")
-  const [dateScope, setDateScope] = useState<"today" | "upcoming" | "all">("today");
+  // Date scope filter ("today", "upcoming" for today + after, "archived" for past uncompleted, "all")
+  const [dateScope, setDateScope] = useState<"today" | "upcoming" | "archived" | "all">("today");
 
   // Accordion dropdown states
   const [meetingsOpen, setMeetingsOpen] = useState(true);
   const [eventsOpen, setEventsOpen] = useState(true);
 
   // Filter dropdowns
-  const [meetingFilter, setMeetingFilter] = useState<"all" | "pending" | "done">("all");
-  const [eventFilter, setEventFilter] = useState<"all" | "ours" | "imp" | "recurring">("all");
+  const [meetingFilter, setMeetingFilter] = useState<"all" | "pending" | "done" | "archived">("all");
+  const [eventFilter, setEventFilter] = useState<"all" | "ours" | "others" | "imp" | "recurring" | "archived">("all");
 
   // ── Meetings Form State ──
   const [showAddMeetingForm, setShowAddMeetingForm] = useState(false);
@@ -2553,8 +2639,10 @@ function MeetingsAndEventsSection({
     });
 
     setMeetingsOpen(true);
-    if (targetDate !== currentDate) {
-      setDateScope(targetDate > currentDate ? "upcoming" : "all");
+    if (targetDate < currentDate) {
+      setDateScope("all");
+    } else {
+      setDateScope("upcoming");
     }
 
     setSelectedProjectId("");
@@ -2584,8 +2672,10 @@ function MeetingsAndEventsSection({
     });
 
     setEventsOpen(true);
-    if (targetDate !== currentDate) {
-      setDateScope(targetDate > currentDate ? "upcoming" : "all");
+    if (targetDate < currentDate) {
+      setDateScope("all");
+    } else {
+      setDateScope("upcoming");
     }
 
     setEventTitle("");
@@ -2654,42 +2744,56 @@ function MeetingsAndEventsSection({
   const currentDayOfWeek = new Date(currentDate + "T12:00:00").getDay();
 
   const isTodayMeeting = (m: Meeting) => {
-    if (!m.date) return true;
-    return m.date === currentDate;
+    return (m.date || currentDate) === currentDate;
   };
 
   const isTodayEvent = (e: EventItem) => {
-    if (!e.date) return true;
-    if (e.date === currentDate) return true;
-    if (e.recurrence === "weekly" && typeof e.recurringDay === "number" && e.recurringDay === currentDayOfWeek) {
+    if (e.recurrence === "weekly") {
+      if (typeof e.recurringDay === "number") return e.recurringDay === currentDayOfWeek;
+      if (e.date) return new Date(e.date + "T12:00:00").getDay() === currentDayOfWeek;
       return true;
     }
-    return false;
+    return (e.date || currentDate) === currentDate;
   };
 
   const isUpcomingMeeting = (m: Meeting) => {
-    if (!m.date) return false;
-    return m.date > currentDate;
+    if (!m.date) return true;
+    return m.date >= currentDate;
   };
 
   const isUpcomingEvent = (e: EventItem) => {
-    if (e.date && e.date > currentDate) return true;
-    if (e.recurrence === "weekly" && typeof e.recurringDay === "number" && e.recurringDay !== currentDayOfWeek) {
-      return true;
-    }
-    return false;
+    if (e.recurrence === "weekly") return true;
+    if (!e.date) return true;
+    return e.date >= currentDate;
   };
 
-  // Date Scoped lists (Today by default)
+  const isArchivedMeeting = (m: Meeting) => {
+    if (!m.date) return false;
+    return m.date < currentDate && m.status !== "done";
+  };
+
+  const isArchivedEvent = (e: EventItem) => {
+    if (e.recurrence === "weekly") return false;
+    if (!e.date) return false;
+    return e.date < currentDate && e.status !== "done";
+  };
+
+  const effectiveEventFilter = eventFilter;
+
+  // Date Scoped lists (Today = only today, Upcoming = today + all after, Archived = past uncompleted, All = all dates)
   const dateScopedMeetings = meetings.filter((m) => {
+    if (meetingFilter === "archived") return isArchivedMeeting(m);
     if (dateScope === "today") return isTodayMeeting(m);
     if (dateScope === "upcoming") return isUpcomingMeeting(m);
+    if (dateScope === "archived") return isArchivedMeeting(m);
     return true;
   });
 
   const dateScopedEvents = events.filter((e) => {
+    if (effectiveEventFilter === "archived") return isArchivedEvent(e);
     if (dateScope === "today") return isTodayEvent(e);
     if (dateScope === "upcoming") return isUpcomingEvent(e);
+    if (dateScope === "archived") return isArchivedEvent(e);
     return true;
   });
 
@@ -2697,38 +2801,76 @@ function MeetingsAndEventsSection({
   const todayEventsCount = events.filter(isTodayEvent).length;
   const upcomingMeetingsCount = meetings.filter(isUpcomingMeeting).length;
   const upcomingEventsCount = events.filter(isUpcomingEvent).length;
+  const archivedMeetingsCount = meetings.filter(isArchivedMeeting).length;
+  const archivedEventsCount = events.filter(isArchivedEvent).length;
 
   // Counts based on active date scope
   const pendingMeetingsCount = dateScopedMeetings.filter((m) => m.status !== "done").length;
   const doneMeetingsCount = dateScopedMeetings.filter((m) => m.status === "done").length;
 
   const oursEventsCount = dateScopedEvents.filter((e) => e.category === "Ours").length;
-  const impEventsCount = dateScopedEvents.filter((e) => e.category === "Imp").length;
+  const othersEventsCount = dateScopedEvents.filter((e) => e.category === "Others" || e.category === "Imp").length;
   const recurringEventsCount = dateScopedEvents.filter((e) => e.recurrence === "weekly").length;
 
-  // Filtered lists
-  const filteredMeetings = dateScopedMeetings.filter((m) => {
-    if (meetingFilter === "pending") return m.status !== "done";
-    if (meetingFilter === "done") return m.status === "done";
-    return true;
-  });
+  // Filtered lists (sorted chronologically: date ascending, then time ascending)
+  const filteredMeetings = dateScopedMeetings
+    .filter((m) => {
+      if (meetingFilter === "pending") return m.status !== "done";
+      if (meetingFilter === "done") return m.status === "done";
+      if (meetingFilter === "archived") return isArchivedMeeting(m);
+      return true;
+    })
+    .sort((a, b) => {
+      const dateA = a.date || currentDate;
+      const dateB = b.date || currentDate;
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      const timeA = parseTimeToMinutes(a.time);
+      const timeB = parseTimeToMinutes(b.time);
+      if (timeA !== timeB) return timeA - timeB;
+      return (a.projectId || "").localeCompare(b.projectId || "");
+    });
 
-  const effectiveEventFilter =
-    viewMode === "events_ours" ? "ours" : viewMode === "events_imp" ? "imp" : eventFilter;
+  const filteredEvents = dateScopedEvents
+    .filter((e) => {
+      if (effectiveEventFilter === "ours") return e.category === "Ours";
+      if (effectiveEventFilter === "others" || effectiveEventFilter === "imp") return e.category === "Others" || e.category === "Imp";
+      if (effectiveEventFilter === "recurring") return e.recurrence === "weekly";
+      if (effectiveEventFilter === "archived") return isArchivedEvent(e);
+      return true;
+    })
+    .sort((a, b) => {
+      // 1. Re-occurring events MUST be on top!
+      const isRecA = a.recurrence === "weekly" ? 1 : 0;
+      const isRecB = b.recurrence === "weekly" ? 1 : 0;
+      if (isRecA !== isRecB) return isRecB - isRecA; // recurring first
 
-  const filteredEvents = dateScopedEvents.filter((e) => {
-    if (effectiveEventFilter === "ours") return e.category === "Ours";
-    if (effectiveEventFilter === "imp") return e.category === "Imp";
-    if (effectiveEventFilter === "recurring") return e.recurrence === "weekly";
-    return true;
-  });
+      // If both are recurring, sort by day of week (0 to 6), then time
+      if (isRecA && isRecB) {
+        const dayA = typeof a.recurringDay === "number" ? a.recurringDay : (a.date ? new Date(a.date + "T12:00:00").getDay() : 0);
+        const dayB = typeof b.recurringDay === "number" ? b.recurringDay : (b.date ? new Date(b.date + "T12:00:00").getDay() : 0);
+        if (dayA !== dayB) return dayA - dayB;
+        const timeA = parseTimeToMinutes(a.time);
+        const timeB = parseTimeToMinutes(b.time);
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.title || "").localeCompare(b.title || "");
+      }
 
-  const showMeetingsSection = viewMode === "all" || viewMode === "meetings";
-  const showEventsSection = viewMode === "all" || viewMode.startsWith("events");
+      // One-time events: sort by date ascending, then time ascending
+      const dateA = a.date || currentDate;
+      const dateB = b.date || currentDate;
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      const timeA = parseTimeToMinutes(a.time);
+      const timeB = parseTimeToMinutes(b.time);
+      if (timeA !== timeB) return timeA - timeB;
+      return (a.title || "").localeCompare(b.title || "");
+    });
+
+  const showMeetingsSection = true;
+  const showEventsSection = true;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: trackerOpen ? 16 : 0 }}>
-      {/* ── Top Header Toolbar with Minimize Dropdown & Category Selector ── */}
+      {/* ── Top Header Toolbar with Minimize Chevron ── */}
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: trackerOpen ? 8 : 0 }}>
           <div
@@ -2767,162 +2909,150 @@ function MeetingsAndEventsSection({
               {dateScopedMeetings.length + dateScopedEvents.length}
             </span>
           </div>
-
-          {/* Top Category Selector Dropdown */}
-          <select
-            value={viewMode}
-            onChange={(e) => {
-              setViewMode(e.target.value as any);
-              if (!trackerOpen) setTrackerOpen(true);
-            }}
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              padding: "3px 8px",
-              borderRadius: 7,
-              border: "1px solid #E7E5E4",
-              background: "#FAFAF9",
-              color: "#1C1917",
-              cursor: "pointer",
-              outline: "none"
-            }}
-          >
-            <option value="all">All (Meetings & Events)</option>
-            <option value="meetings">Meetings ({dateScopedMeetings.length})</option>
-            <option value="events">Events ({dateScopedEvents.length})</option>
-            <option value="events_ours">↳ Events: Ours ({oursEventsCount})</option>
-            <option value="events_imp">↳ Events: Imp ({impEventsCount})</option>
-          </select>
         </div>
 
         {trackerOpen && (
-          <>
-            {/* ── DATE FILTER BAR (Default: Today) ── */}
-            <div style={{ display: "flex", gap: 4, padding: 3, background: "#F5F5F4", borderRadius: 8, marginBottom: 6 }}>
-              <button
-                onClick={() => setDateScope("today")}
-                style={{
-                  flex: 1.1,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: dateScope === "today" ? "#fff" : "transparent",
-                  color: dateScope === "today" ? "#2563EB" : "#78716C",
-                  boxShadow: dateScope === "today" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 4
-                }}
-              >
-                <Calendar size={11} color={dateScope === "today" ? "#2563EB" : "#78716C"} /> Today ({todayMeetingsCount + todayEventsCount})
-              </button>
-              <button
-                onClick={() => setDateScope("upcoming")}
-                style={{
-                  flex: 1.1,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: dateScope === "upcoming" ? "#fff" : "transparent",
-                  color: dateScope === "upcoming" ? "#7C3AED" : "#78716C",
-                  boxShadow: dateScope === "upcoming" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s"
-                }}
-              >
-                Upcoming ({upcomingMeetingsCount + upcomingEventsCount})
-              </button>
-              <button
-                onClick={() => setDateScope("all")}
-                style={{
-                  flex: 1,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: dateScope === "all" ? "#fff" : "transparent",
-                  color: dateScope === "all" ? "#1C1917" : "#78716C",
-                  boxShadow: dateScope === "all" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s"
-                }}
-              >
-                All Dates ({meetings.length + events.length})
-              </button>
-            </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 6,
+              width: "100%",
+              boxSizing: "border-box",
+              marginTop: 4
+            }}
+          >
+            {[
+              {
+                id: "today" as const,
+                label: "Today",
+                count: todayMeetingsCount + todayEventsCount,
+                icon: Calendar,
+                activeColor: "#2563EB",
+                activeBg: "#FFFFFF",
+                activeBorder: "#BFDBFE",
+                badgeBg: "#EFF6FF",
+                badgeColor: "#1D4ED8",
+                badgeBorder: "#DBEAFE",
+                title: "Only today's meetings and events"
+              },
+              {
+                id: "upcoming" as const,
+                label: "Upcoming",
+                count: upcomingMeetingsCount + upcomingEventsCount,
+                icon: Clock,
+                activeColor: "#7C3AED",
+                activeBg: "#FFFFFF",
+                activeBorder: "#DDD6FE",
+                badgeBg: "#F5F3FF",
+                badgeColor: "#6D28D9",
+                badgeBorder: "#EDE9FE",
+                title: "Today and upcoming meetings and events"
+              },
+              {
+                id: "archived" as const,
+                label: "Archived",
+                count: archivedMeetingsCount + archivedEventsCount,
+                icon: Archive,
+                activeColor: "#D97706",
+                activeBg: "#FFFFFF",
+                activeBorder: "#FDE68A",
+                badgeBg: "#FEF3C7",
+                badgeColor: "#B45309",
+                badgeBorder: "#FDE68A",
+                title: "Past uncompleted meetings and events"
+              },
+              {
+                id: "all" as const,
+                label: "All",
+                count: meetings.length + events.length,
+                icon: Layers,
+                activeColor: "#0F172A",
+                activeBg: "#FFFFFF",
+                activeBorder: "#CBD5E1",
+                badgeBg: "#F1F5F9",
+                badgeColor: "#334155",
+                badgeBorder: "#E2E8F0",
+                title: "All meetings and events across all dates"
+              }
+            ].map((tab) => {
+              const isActive = dateScope === tab.id;
+              const IconComp = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setDateScope(tab.id)}
+                  title={tab.title}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "6px 9px",
+                    borderRadius: 8,
+                    border: isActive ? `1.5px solid ${tab.activeBorder}` : "1.5px solid #E7E5E4",
+                    background: isActive ? tab.activeBg : "#FBFBFA",
+                    color: isActive ? tab.activeColor : "#57534E",
+                    boxShadow: isActive ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                    boxSizing: "border-box",
+                    minWidth: 0,
+                    width: "100%",
+                    outline: "none"
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.background = "#F5F5F4";
+                      e.currentTarget.style.color = "#1C1917";
+                      e.currentTarget.style.borderColor = "#D6D3D1";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.background = "#FBFBFA";
+                      e.currentTarget.style.color = "#57534E";
+                      e.currentTarget.style.borderColor = "#E7E5E4";
+                    }
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 5.5, minWidth: 0 }}>
+                    <IconComp size={12} color={isActive ? tab.activeColor : "#78716C"} style={{ flexShrink: 0 }} />
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: isActive ? 700 : 600,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        letterSpacing: "-0.01em"
+                      }}
+                    >
+                      {tab.label}
+                    </span>
+                  </div>
 
-            {/* Quick Category Tab Pills */}
-            <div style={{ display: "flex", gap: 4, padding: 3, background: "#F5F5F4", borderRadius: 8 }}>
-              <button
-                onClick={() => setViewMode("all")}
-                style={{
-                  flex: 1,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: viewMode === "all" ? "#fff" : "transparent",
-                  color: viewMode === "all" ? "#1C1917" : "#78716C",
-                  boxShadow: viewMode === "all" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s"
-                }}
-              >
-                All ({dateScopedMeetings.length + dateScopedEvents.length})
-              </button>
-              <button
-                onClick={() => {
-                  setViewMode("meetings");
-                  setMeetingsOpen(true);
-                }}
-                style={{
-                  flex: 1.2,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: viewMode === "meetings" ? "#fff" : "transparent",
-                  color: viewMode === "meetings" ? "#2563EB" : "#78716C",
-                  boxShadow: viewMode === "meetings" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s"
-                }}
-              >
-                Meetings ({dateScopedMeetings.length})
-              </button>
-              <button
-                onClick={() => {
-                  setViewMode("events");
-                  setEventsOpen(true);
-                }}
-                style={{
-                  flex: 1.4,
-                  padding: "4px 0",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  background: viewMode.startsWith("events") ? "#fff" : "transparent",
-                  color: viewMode.startsWith("events") ? "#7C3AED" : "#78716C",
-                  boxShadow: viewMode.startsWith("events") ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
-                  transition: "all 0.15s"
-                }}
-              >
-                Events ({dateScopedEvents.length})
-              </button>
-            </div>
-          </>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: "1px 5.5px",
+                      borderRadius: 10,
+                      background: isActive ? tab.badgeBg : "#E7E5E4",
+                      color: isActive ? tab.badgeColor : "#78716C",
+                      border: isActive ? `1px solid ${tab.badgeBorder}` : "1px solid transparent",
+                      minWidth: 15,
+                      textAlign: "center",
+                      flexShrink: 0,
+                      lineHeight: "14px",
+                      transition: "all 0.15s ease"
+                    }}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -2998,6 +3128,9 @@ function MeetingsAndEventsSection({
                 <option value="all">All ({dateScopedMeetings.length})</option>
                 <option value="pending">Pending ({pendingMeetingsCount})</option>
                 <option value="done">Done ({doneMeetingsCount})</option>
+                {archivedMeetingsCount > 0 && (
+                  <option value="archived">Archived ({archivedMeetingsCount})</option>
+                )}
               </select>
 
               {!showAddMeetingForm && (
@@ -3180,30 +3313,30 @@ function MeetingsAndEventsSection({
                   </div>
 
                   {/* Date & Time Inputs */}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ flex: 1 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, width: "100%" }}>
+                    <div style={{ minWidth: 0 }}>
                       <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>DATE</label>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", width: "100%" }}>
                         <Calendar size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
                           type="date"
                           value={meetingDate}
                           onChange={(e) => setMeetingDate(e.target.value)}
-                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minWidth: 0, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
                       </div>
                     </div>
 
-                    <div style={{ flex: 1 }}>
+                    <div style={{ minWidth: 0 }}>
                       <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>TIME</label>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", width: "100%" }}>
                         <Clock size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
                           type="text"
                           placeholder="e.g., 2:30 PM"
                           value={meetingTime}
                           onChange={(e) => setMeetingTime(e.target.value)}
-                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minWidth: 0, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
                       </div>
                     </div>
@@ -3254,7 +3387,7 @@ function MeetingsAndEventsSection({
                   <div style={{ textAlign: "center", padding: "10px 8px", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 8 }}>
                     <p style={{ fontSize: 11, margin: 0, fontWeight: 500 }}>
                       {dateScopedMeetings.length === 0
-                        ? (dateScope === "today" ? "No meetings scheduled for today." : "No upcoming meetings.")
+                        ? (dateScope === "all" ? "No meetings scheduled." : dateScope === "archived" ? "No archived meetings." : dateScope === "today" ? "No meetings today." : "No upcoming meetings.")
                         : "No meetings match this filter."}
                     </p>
                   </div>
@@ -3288,13 +3421,13 @@ function MeetingsAndEventsSection({
                       >
                         {isEditing ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 95px", gap: 6, alignItems: "center", width: "100%" }}>
                               <input
                                 autoFocus
                                 value={editMeetingTitle}
                                 onChange={(e) => setEditMeetingTitle(e.target.value)}
                                 placeholder="Title / Project"
-                                style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 12, padding: "5px 8px" }}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") handleSaveEditMeeting(m.id);
                                   if (e.key === "Escape") setEditingMeetingId(null);
@@ -3304,7 +3437,7 @@ function MeetingsAndEventsSection({
                                 value={editMeetingTime}
                                 onChange={(e) => setEditMeetingTime(e.target.value)}
                                 placeholder="Time (e.g. 2:30 PM)"
-                                style={{ ...inputStyle, width: 95, fontSize: 12, padding: "5px 8px" }}
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 12, padding: "5px 8px" }}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") handleSaveEditMeeting(m.id);
                                   if (e.key === "Escape") setEditingMeetingId(null);
@@ -3364,7 +3497,7 @@ function MeetingsAndEventsSection({
                               }}
                               title="Double-click to edit meeting"
                             >
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", minWidth: 0 }}>
                                 {/* Project Tag */}
                                 <span
                                   style={{
@@ -3379,8 +3512,8 @@ function MeetingsAndEventsSection({
                                     overflow: "hidden",
                                     textOverflow: "ellipsis",
                                     whiteSpace: "nowrap",
-                                    maxWidth: 120,
-                                    flexShrink: 1
+                                    maxWidth: 105,
+                                    flexShrink: 0
                                   }}
                                 >
                                   {m.projectId}
@@ -3408,19 +3541,20 @@ function MeetingsAndEventsSection({
                                     title={`Date: ${m.date}`}
                                     style={{
                                       fontSize: 10,
-                                      color: "#78716C",
+                                      color: isArchivedMeeting(m) ? "#B45309" : "#78716C",
                                       display: "inline-flex",
                                       alignItems: "center",
                                       gap: 3,
-                                      background: "#F5F5F4",
-                                      padding: "1px 6px",
+                                      background: isArchivedMeeting(m) ? "#FEF3C7" : "#F5F5F4",
+                                      border: isArchivedMeeting(m) ? "1px solid #FDE68A" : "none",
+                                      padding: "1.5px 6px",
                                       borderRadius: 5,
                                       fontWeight: 600,
                                       whiteSpace: "nowrap",
                                       flexShrink: 0
                                     }}
                                   >
-                                    <Calendar size={10} color="#A8A29E" style={{ flexShrink: 0 }} />
+                                    <Calendar size={10} color={isArchivedMeeting(m) ? "#B45309" : "#A8A29E"} style={{ flexShrink: 0 }} />
                                     {m.date === currentDate ? "Today" : formatDateDisplay(m.date)}
                                   </span>
                                 )}
@@ -3492,6 +3626,31 @@ function MeetingsAndEventsSection({
 
                             {/* Action Buttons & Status Cycle */}
                             <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                              {isArchivedMeeting(m) && (
+                                <button
+                                  onClick={() => onEditMeeting?.(m.id, { ...m, date: currentDate })}
+                                  className="tracker-action-btn"
+                                  style={{
+                                    background: "#EFF6FF",
+                                    border: "1px solid #BFDBFE",
+                                    color: "#2563EB",
+                                    opacity: 0,
+                                    cursor: "pointer",
+                                    padding: "2px 6px",
+                                    borderRadius: 4,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 3,
+                                    transition: "opacity 0.1s"
+                                  }}
+                                  title="Reschedule to Today"
+                                >
+                                  <ArrowRight size={10} /> Today
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => {
                                   setEditingMeetingId(m.id);
@@ -3634,8 +3793,11 @@ function MeetingsAndEventsSection({
               >
                 <option value="all">All Events ({dateScopedEvents.length})</option>
                 <option value="ours">Ours ({oursEventsCount})</option>
-                <option value="imp">Imp ({impEventsCount})</option>
+                <option value="others">Others ({othersEventsCount})</option>
                 <option value="recurring">Re-occurring ({recurringEventsCount})</option>
+                {archivedEventsCount > 0 && (
+                  <option value="archived">Archived ({archivedEventsCount})</option>
+                )}
               </select>
 
               {!showAddEventForm && (
@@ -3703,25 +3865,42 @@ function MeetingsAndEventsSection({
                   Ours ({oursEventsCount})
                 </button>
                 <button
-                  onClick={() => setEventFilter("imp")}
+                  onClick={() => setEventFilter("others")}
                   style={{
                     padding: "2px 8px",
                     borderRadius: 12,
                     fontSize: 10,
                     fontWeight: 700,
                     cursor: "pointer",
-                    border: effectiveEventFilter === "imp" ? "1px solid #F59E0B" : "1px solid #E7E5E4",
-                    background: effectiveEventFilter === "imp" ? "#FEF3C7" : "#fff",
-                    color: effectiveEventFilter === "imp" ? "#D97706" : "#78716C"
+                    border: (effectiveEventFilter === "others" || effectiveEventFilter === "imp") ? "1px solid #F59E0B" : "1px solid #E7E5E4",
+                    background: (effectiveEventFilter === "others" || effectiveEventFilter === "imp") ? "#FEF3C7" : "#fff",
+                    color: (effectiveEventFilter === "others" || effectiveEventFilter === "imp") ? "#D97706" : "#78716C"
                   }}
                 >
-                  ★ Imp ({impEventsCount})
+                  ★ Others ({othersEventsCount})
                 </button>
+                {archivedEventsCount > 0 && (
+                  <button
+                    onClick={() => setEventFilter("archived")}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 12,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      border: effectiveEventFilter === "archived" ? "1px solid #DC2626" : "1px solid #E7E5E4",
+                      background: effectiveEventFilter === "archived" ? "#FEF2F2" : "#fff",
+                      color: effectiveEventFilter === "archived" ? "#DC2626" : "#78716C"
+                    }}
+                  >
+                    Archived ({archivedEventsCount})
+                  </button>
+                )}
               </div>
 
               {/* Add Event Form */}
               {showAddEventForm && (
-                <div style={{ ...cardStyle, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ ...cardStyle, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 10, width: "100%", boxSizing: "border-box" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#78716C" }}>NEW EVENT</span>
                     <button
@@ -3740,11 +3919,11 @@ function MeetingsAndEventsSection({
                       placeholder="e.g., Masterclass, Luma Meetup, Demo..."
                       value={eventTitle}
                       onChange={(e) => setEventTitle(e.target.value)}
-                      style={{ ...inputStyle, fontSize: 12, padding: "7px 10px" }}
+                      style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 12, padding: "7px 10px" }}
                     />
                   </div>
 
-                  {/* Category Dropdown (Ours | Imp) */}
+                  {/* Category Dropdown (Ours | Others) */}
                   <div>
                     <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>CATEGORY</label>
                     <select
@@ -3752,6 +3931,7 @@ function MeetingsAndEventsSection({
                       onChange={(e) => setEventCategory(e.target.value as EventCategory)}
                       style={{
                         width: "100%",
+                        boxSizing: "border-box",
                         fontSize: 12,
                         padding: "7px 10px",
                         borderRadius: 8,
@@ -3763,26 +3943,26 @@ function MeetingsAndEventsSection({
                       }}
                     >
                       <option value="Ours">Ours (Our Event / Hosted)</option>
-                      <option value="Imp">Imp (Important / External Event)</option>
+                      <option value="Others">Others (External / Other Event)</option>
                     </select>
                   </div>
 
                   {/* Date & Recurrence Inputs */}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ flex: 1 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, width: "100%" }}>
+                    <div style={{ minWidth: 0 }}>
                       <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>DATE</label>
-                      <div style={{ position: "relative" }}>
+                      <div style={{ position: "relative", width: "100%" }}>
                         <Calendar size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
                           type="date"
                           value={eventDate}
                           onChange={(e) => setEventDate(e.target.value)}
-                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minWidth: 0, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
                       </div>
                     </div>
 
-                    <div style={{ flex: 1.2 }}>
+                    <div style={{ minWidth: 0 }}>
                       <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>
                         RECURRENCE
                       </label>
@@ -3791,6 +3971,8 @@ function MeetingsAndEventsSection({
                         onChange={(e) => setEventRecurrence(e.target.value as EventRecurrence)}
                         style={{
                           width: "100%",
+                          boxSizing: "border-box",
+                          minWidth: 0,
                           fontSize: 11,
                           fontWeight: 600,
                           padding: "7px 8px",
@@ -3803,38 +3985,52 @@ function MeetingsAndEventsSection({
                       >
                         <option value="one_time">One-time</option>
                         <option value="weekly">
-                          {eventDate ? `Re-occurring (Every ${getDayName(eventDate)})` : "Re-occurring (Weekly)"}
+                          {eventDate ? `${getDayShort(eventDate)} (Re-Occuring)` : "Re-Occuring"}
                         </option>
                       </select>
                     </div>
                   </div>
 
                   {/* Time & Location Inputs */}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>TIME (OPTIONAL)</label>
-                      <div style={{ position: "relative" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, width: "100%" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4, whiteSpace: "nowrap" }}>TIME (OPTIONAL)</label>
+                      <div style={{ position: "relative", width: "100%" }}>
                         <Clock size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
                           type="text"
                           placeholder="e.g. 7:00 PM"
                           value={eventTime}
                           onChange={(e) => setEventTime(e.target.value)}
-                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minWidth: 0, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
                       </div>
                     </div>
 
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", display: "block", marginBottom: 4 }}>PLATFORM / LOCATION</label>
-                      <div style={{ position: "relative" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <label
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: "#A8A29E",
+                          display: "block",
+                          marginBottom: 4,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis"
+                        }}
+                        title="PLATFORM / LOCATION"
+                      >
+                        PLATFORM / LOCATION
+                      </label>
+                      <div style={{ position: "relative", width: "100%" }}>
                         <MapPin size={12} color="#A8A29E" style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }} />
                         <input
                           type="text"
                           placeholder="e.g. Luma, Zoom"
                           value={eventLocation}
                           onChange={(e) => setEventLocation(e.target.value)}
-                          style={{ ...inputStyle, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minWidth: 0, paddingLeft: 26, fontSize: 12, paddingTop: 6, paddingBottom: 6 }}
                         />
                       </div>
                     </div>
@@ -3882,10 +4078,10 @@ function MeetingsAndEventsSection({
                   <div style={{ textAlign: "center", padding: "10px 8px", color: "#A8A29E", border: "1px dashed #E7E5E4", borderRadius: 8 }}>
                     <p style={{ fontSize: 11, margin: 0, fontWeight: 500 }}>
                       {dateScopedEvents.length === 0
-                        ? (dateScope === "today" ? "No events scheduled for today." : "No upcoming events.")
+                        ? (dateScope === "all" ? "No events scheduled." : dateScope === "archived" ? "No archived events." : dateScope === "today" ? "No events today." : "No upcoming events.")
                         : "No events in this category."}
                     </p>
-                    {events.length > 0 && dateScope === "today" && (
+                    {events.length > 0 && dateScope === "upcoming" && (
                       <button
                         onClick={() => setDateScope("all")}
                         style={{
@@ -3932,13 +4128,13 @@ function MeetingsAndEventsSection({
                       >
                         {isEditing ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center", width: "100%" }}>
                               <input
                                 autoFocus
                                 value={editEventTitle}
                                 onChange={(e) => setEditEventTitle(e.target.value)}
                                 placeholder="Event Title"
-                                style={{ ...inputStyle, flex: 1, fontSize: 12, padding: "5px 8px" }}
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 12, padding: "5px 8px" }}
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") handleSaveEditEvent(evt.id);
                                   if (e.key === "Escape") setEditingEventId(null);
@@ -3954,19 +4150,21 @@ function MeetingsAndEventsSection({
                                   borderRadius: 6,
                                   border: "1px solid #E7E5E4",
                                   background: "#FAFAF9",
-                                  color: "#1C1917"
+                                  color: "#1C1917",
+                                  boxSizing: "border-box",
+                                  flexShrink: 0
                                 }}
                               >
                                 <option value="Ours">Ours</option>
-                                <option value="Imp">Imp</option>
+                                <option value="Others">Others</option>
                               </select>
                             </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, alignItems: "center", width: "100%" }}>
                               <input
                                 type="date"
                                 value={editEventDate}
                                 onChange={(e) => setEditEventDate(e.target.value)}
-                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 6px" }}
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 11, padding: "4px 6px" }}
                               />
                               <select
                                 value={editEventRecurrence}
@@ -3979,27 +4177,29 @@ function MeetingsAndEventsSection({
                                   border: "1px solid #E7E5E4",
                                   background: "#FAFAF9",
                                   color: "#1C1917",
-                                  flex: 1.2
+                                  width: "100%",
+                                  minWidth: 0,
+                                  boxSizing: "border-box"
                                 }}
                               >
                                 <option value="one_time">One-time</option>
                                 <option value="weekly">
-                                  {editEventDate ? `Re-occurring (${getDayName(editEventDate)})` : "Re-occurring"}
+                                  {editEventDate ? `${getDayShort(editEventDate)} (Re-Occuring)` : "Re-Occuring"}
                                 </option>
                               </select>
                             </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, alignItems: "center", width: "100%" }}>
                               <input
                                 value={editEventTime}
                                 onChange={(e) => setEditEventTime(e.target.value)}
                                 placeholder="Time (e.g. 7:00 PM)"
-                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }}
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 11, padding: "4px 8px" }}
                               />
                               <input
                                 value={editEventLocation}
                                 onChange={(e) => setEditEventLocation(e.target.value)}
-                                placeholder="Location/Platform (e.g. Luma)"
-                                style={{ ...inputStyle, flex: 1, fontSize: 11, padding: "4px 8px" }}
+                                placeholder="Platform / Location"
+                                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", fontSize: 11, padding: "4px 8px" }}
                               />
                             </div>
                             <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
@@ -4084,7 +4284,7 @@ function MeetingsAndEventsSection({
                                       gap: 3
                                     }}
                                   >
-                                    <Star size={9} fill="#D97706" color="#D97706" /> IMP
+                                    <Star size={9} fill="#D97706" color="#D97706" /> OTHERS
                                   </span>
                                 )}
 
@@ -4107,7 +4307,7 @@ function MeetingsAndEventsSection({
                                     }}
                                   >
                                     <Repeat size={9} />
-                                    {typeof evt.recurringDay === "number" ? `Every ${DAYS_OF_WEEK_SHORT[evt.recurringDay]}` : "Weekly"}
+                                    {getRecurringDayLabel(evt)}
                                   </span>
                                 ) : (
                                   <span
@@ -4125,25 +4325,49 @@ function MeetingsAndEventsSection({
                                   </span>
                                 )}
 
-                                {/* Date Badge */}
-                                {evt.date && (
+                                {/* Date Badge (only shown for one-time events; recurring events show day re-occuring label) */}
+                                {evt.recurrence !== "weekly" && evt.date && (
                                   <span
                                     title={`Date: ${evt.date}`}
                                     style={{
                                       fontSize: 10,
-                                      color: "#78716C",
+                                      color: isArchivedEvent(evt) ? "#B45309" : "#78716C",
                                       display: "inline-flex",
                                       alignItems: "center",
                                       gap: 3,
-                                      background: "#F5F5F4",
+                                      background: isArchivedEvent(evt) ? "#FEF3C7" : "#F5F5F4",
+                                      border: isArchivedEvent(evt) ? "1px solid #FDE68A" : "none",
                                       padding: "1px 5px",
                                       borderRadius: 4,
                                       fontWeight: 600,
                                       whiteSpace: "nowrap"
                                     }}
                                   >
-                                    <Calendar size={10} color="#A8A29E" />
+                                    <Calendar size={10} color={isArchivedEvent(evt) ? "#B45309" : "#A8A29E"} />
                                     {evt.date === currentDate ? "Today" : formatDateDisplay(evt.date)}
+                                  </span>
+                                )}
+
+                                {/* Archived Badge */}
+                                {isArchivedEvent(evt) && (
+                                  <span
+                                    title="Past uncompleted event (Archived)"
+                                    style={{
+                                      padding: "1px 5px",
+                                      borderRadius: 4,
+                                      background: "#FFFBEB",
+                                      color: "#B45309",
+                                      border: "1px solid #FDE68A",
+                                      fontSize: 9.5,
+                                      fontWeight: 700,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3,
+                                      whiteSpace: "nowrap",
+                                      flexShrink: 0
+                                    }}
+                                  >
+                                    <Archive size={9} /> Archived
                                   </span>
                                 )}
 
@@ -4184,6 +4408,31 @@ function MeetingsAndEventsSection({
 
                             {/* Action Buttons & Status Cycle */}
                             <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                              {isArchivedEvent(evt) && (
+                                <button
+                                  onClick={() => onEditEvent?.(evt.id, { ...evt, date: currentDate })}
+                                  className="tracker-action-btn"
+                                  style={{
+                                    background: "#F5F3FF",
+                                    border: "1px solid #DDD6FE",
+                                    color: "#7C3AED",
+                                    opacity: 0,
+                                    cursor: "pointer",
+                                    padding: "2px 6px",
+                                    borderRadius: 4,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 3,
+                                    transition: "opacity 0.1s"
+                                  }}
+                                  title="Reschedule to Today"
+                                >
+                                  <ArrowRight size={10} /> Today
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => {
                                   setEditingEventId(evt.id);

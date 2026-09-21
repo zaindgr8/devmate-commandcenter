@@ -1,66 +1,10 @@
-import { AppState, MainTask, DayData } from "./types";
+import { AppState, DayData, MainTask } from "./types";
 import { supabase } from "./supabase";
+import { getToday, createDayData, DEFAULT_GOALS, cleanStateOfFatima, createEmptyState, normalizeState } from "./stateUtils";
+
+export { getToday, createDayData };
 
 const STORAGE_KEY = "devmate_command_center";
-
-const defaultMainTasks = (): MainTask[] => [
-  { id: "sleep", category: "Mandatory", name: "Sleep", status: "not_started", from: "01:00", to: "07:00", goalLink: "" },
-  { id: "workout", category: "Mandatory", name: "Workout", status: "not_started", from: "07:30", to: "09:30", goalLink: "" },
-  { id: "devmate", category: "Company", name: "Devmate Tasks", status: "not_started", from: "10:30", to: "14:30", goalLink: "" },
-  { id: "content", category: "Misc", name: "Content Creation", status: "not_started", from: "14:30", to: "16:00", goalLink: "" },
-  { id: "learning", category: "Misc", name: "Learning", status: "not_started", from: "16:00", to: "17:30", goalLink: "" },
-];
-
-export const getToday = () => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
-export function createDayData(date: string): DayData {
-  return {
-    date,
-    mainTasks: defaultMainTasks(),
-    subTasks: [],
-    rating: 0,
-    managerNotes: [],
-    meetings: [],
-    events: [],
-  };
-}
-
-const DEFAULT_GOALS = [
-  { id: "g1", title: "Instagram Followers", target: 5000, current: 1200, unit: "followers", color: "#E1306C" },
-  { id: "g2", title: "AI Course Sales", target: 5000, current: 0, unit: "sales", color: "#2563EB" },
-  { id: "g3", title: "App Sales", target: 5000, current: 0, unit: "sales", color: "#16A34A" },
-  { id: "g4", title: "Revenue Target", target: 1000000, current: 0, unit: "$", color: "#F59E0B" },
-];
-
-function cleanStateOfFatima(parsed: AppState): AppState {
-  if (parsed.employees) {
-    parsed.employees = parsed.employees.filter((e) => !e.name.toLowerCase().includes("fatima"));
-  }
-  if (parsed.days) {
-    for (const d of Object.values(parsed.days)) {
-      if (d.subTasks) {
-        d.subTasks = d.subTasks.map((s) => ({
-          ...s,
-          employee: s.employee && s.employee.toLowerCase().includes("fatima") ? undefined : s.employee,
-          text: s.text ? s.text.replace(/@fatima\b/gi, "").trim() : s.text,
-          chips: s.chips
-            ? s.chips.map((c) => ({
-                ...c,
-                text: c.text.replace(/@fatima\b/gi, "").trim(),
-              }))
-            : s.chips,
-        }));
-      }
-    }
-  }
-  return parsed;
-}
 
 export async function loadState(): Promise<AppState> {
   if (typeof window === "undefined") {
