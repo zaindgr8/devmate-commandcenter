@@ -13,7 +13,7 @@ export async function loadState(): Promise<AppState> {
   }
   
   try {
-    const res = await fetch("/api/state");
+    const res = await fetch("/api/state", { cache: "no-store" });
     const parsed = await res.json();
     if (parsed) {
       const td = getToday();
