@@ -898,8 +898,20 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       meetings: remainingMeetings,
       events: remainingEvents,
     };
+    // Carry today's edited timetable (mainTasks) to the next day,
+    // but only if the next day still has the factory-default task IDs
+    // (i.e. the user hasn't already customised tomorrow's timetable).
+    const defaultIds = new Set(["sleep", "workout", "devmate", "content", "learning"]);
+    const nextHasCustomTimetable =
+      existingNext.mainTasks &&
+      existingNext.mainTasks.some((t) => !defaultIds.has(t.id));
+    const nextMainTasks = nextHasCustomTimetable
+      ? existingNext.mainTasks
+      : td.mainTasks.map((t) => ({ ...t, status: "not_started" as Status }));
+
     const updatedNext = {
       ...existingNext,
+      mainTasks: nextMainTasks,
       subTasks: newNextSubTasks,
       managerNotes: [...carriedNotes, ...(existingNext.managerNotes || [])],
       meetings: [...carriedMeetings, ...(existingNext.meetings || [])],
