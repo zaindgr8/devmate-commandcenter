@@ -1,5 +1,5 @@
 "use client";
-// AlertTicker: persisted in localStorage for simplicity (not in AppState)
+// TimelineBar: sticky top bar showing current timetable block
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
@@ -28,143 +28,150 @@ function fmtDate(d: string) {
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? "Good Morning" : h < 17 ? "Good Afternoon" : "Good Evening"; }
 
-/* ─── Alert Ticker ─── */
-function AlertTicker() {
-  const STORAGE_KEY = "devmate_alerts";
-  const [alerts, setAlerts] = useState<string[]>(() => {
-    if (typeof window === "undefined") return ["Stay focused. Ship daily. 🚀"];
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? JSON.parse(saved) : ["Stay focused. Ship daily. 🚀"];
-    } catch { return ["Stay focused. Ship daily. 🚀"]; }
-  });
-  const [showInput, setShowInput] = useState(false);
-  const [draft, setDraft] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+/* ─── Timeline Bar helpers ─── */
+function timeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + (m || 0);
+}
+function fmtTime(t: string): string {
+  const [h, m] = t.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hh = h % 12 || 12;
+  return m === 0 ? `${hh}${ampm}` : `${hh}:${String(m).padStart(2, "0")}${ampm}`;
+}
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts));
-    }
-  }, [alerts]);
-
-  useEffect(() => {
-    if (showInput) inputRef.current?.focus();
-  }, [showInput]);
-
-  const addAlert = () => {
-    const t = draft.trim();
-    if (!t) { setShowInput(false); return; }
-    setAlerts(prev => [...prev, t]);
-    setDraft("");
-    setShowInput(false);
+/* ─── Timeline Bar ─── */
+function TimelineBar({ tasks }: { tasks: MainTask[] }) {
+  const getNow = () => {
+    const n = new Date();
+    return n.getHours() * 60 + n.getMinutes();
   };
+  const [nowMin, setNowMin] = useState(getNow);
 
-  const removeAlert = (idx: number) =>
-    setAlerts(prev => prev.filter((_, i) => i !== idx));
+  useEffect(() => {
+    const tick = () => setNowMin(getNow());
+    const id = setInterval(tick, 30000); // refresh every 30s
+    return () => clearInterval(id);
+  }, []);
 
-  // Build the scrolling text: repeat alerts so it loops
-  const tickerText = alerts.length > 0
-    ? [...alerts, ...alerts].map((a, i) => (
-      <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 8, paddingRight: 60 }}>
-        <span style={{ opacity: 0.6, fontSize: 10 }}>●</span>
-        {a}
-        <button
-          onClick={(e) => { e.stopPropagation(); removeAlert(i % alerts.length); }}
-          title="Remove alert"
-          style={{
-            background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%",
-            width: 14, height: 14, display: "inline-flex", alignItems: "center",
-            justifyContent: "center", color: "#fff", cursor: "pointer",
-            fontSize: 10, lineHeight: 1, flexShrink: 0,
-          }}
-        >×</button>
-      </span>
-    ))
-    : [<span key="empty" style={{ paddingRight: 60, opacity: 0.7 }}>No alerts — click [+] to add one</span>];
+  // Only show named, non-empty tasks
+  const blocks = tasks.filter(t => t.name && t.from && t.to);
 
-  const duration = Math.max(12, alerts.length * 8);
+  // Find active index
+  const activeIdx = blocks.findIndex(t => {
+    const from = timeToMinutes(t.from);
+    const to = timeToMinutes(t.to);
+    // Handle overnight wrap (e.g. Sleep 01:00–07:00 shown late at night)
+    if (from <= to) return nowMin >= from && nowMin < to;
+    return nowMin >= from || nowMin < to;
+  });
+
+  const active = activeIdx >= 0 ? blocks[activeIdx] : null;
+  const next = activeIdx >= 0 && activeIdx < blocks.length - 1 ? blocks[activeIdx + 1] : null;
+
+  // Current clock
+  const nowH = Math.floor(nowMin / 60);
+  const nowM = nowMin % 60;
+  const ampm = nowH >= 12 ? "PM" : "AM";
+  const nowStr = `${nowH % 12 || 12}:${String(nowM).padStart(2, "0")} ${ampm}`;
 
   return (
     <div style={{
       position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
-      height: 36, background: "linear-gradient(90deg, #DC2626 0%, #B91C1C 50%, #991B1B 100%)",
-      display: "flex", alignItems: "center", overflow: "hidden",
-      boxShadow: "0 2px 12px rgba(220,38,38,0.4)",
+      height: 36,
+      background: "rgba(255,255,255,0.92)",
+      backdropFilter: "blur(12px)",
+      WebkitBackdropFilter: "blur(12px)",
+      borderBottom: "1px solid #F0EEEC",
+      boxShadow: "0 1px 8px rgba(28,25,23,0.06)",
+      display: "flex", alignItems: "center",
+      paddingLeft: 16, paddingRight: 16,
+      gap: 10,
+      overflow: "hidden",
     }}>
-      {/* Scrolling text */}
-      <div style={{ flex: 1, overflow: "hidden", position: "relative", height: "100%", display: "flex", alignItems: "center" }}>
-        <style>{`
-          @keyframes ticker-scroll {
-            0%   { transform: translateX(0); }
-            100% { transform: translateX(-50%); }
-          }
-          .ticker-inner {
-            display: inline-flex;
-            white-space: nowrap;
-            animation: ticker-scroll ${duration}s linear infinite;
-            will-change: transform;
-          }
-          .ticker-inner:hover { animation-play-state: paused; }
-        `}</style>
-        <div className="ticker-inner" style={{
-          fontSize: 12, fontWeight: 600, color: "#fff",
-          letterSpacing: 0.3, fontFamily: "'Inter', sans-serif",
-        }}>
-          {tickerText}
-        </div>
-      </div>
+      <style>{`
+        @keyframes tl-pulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.5; }
+        }
+        .tl-dot { animation: tl-pulse 2s ease-in-out infinite; }
+      `}</style>
 
-      {/* [+] button */}
-      {showInput ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingRight: 12, flexShrink: 0 }}>
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addAlert(); if (e.key === "Escape") { setShowInput(false); setDraft(""); } }}
-            placeholder="New alert…"
-            style={{
-              fontSize: 12, padding: "3px 10px", borderRadius: 6,
-              border: "1.5px solid rgba(255,255,255,0.5)",
-              background: "rgba(255,255,255,0.15)", color: "#fff",
-              outline: "none", width: 200,
-            }}
-          />
-          <button
-            onClick={addAlert}
-            style={{
-              fontSize: 11, fontWeight: 700, padding: "3px 12px", borderRadius: 6,
-              background: "#fff", color: "#DC2626", border: "none", cursor: "pointer",
-            }}
-          >Add</button>
-          <button
-            onClick={() => { setShowInput(false); setDraft(""); }}
-            style={{
-              fontSize: 14, fontWeight: 700, padding: "2px 8px", borderRadius: 6,
-              background: "transparent", color: "rgba(255,255,255,0.7)", border: "none", cursor: "pointer",
-            }}
-          >✕</button>
-        </div>
+      {/* Live clock */}
+      <span style={{
+        fontSize: 11, fontWeight: 700, color: "#1C1917",
+        letterSpacing: 0.5, flexShrink: 0, minWidth: 62,
+        fontVariantNumeric: "tabular-nums",
+      }}>{nowStr}</span>
+
+      {/* Divider */}
+      <span style={{ width: 1, height: 16, background: "#E7E5E4", flexShrink: 0 }} />
+
+      {/* Active block indicator */}
+      {active ? (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+          <span className="tl-dot" style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: "#2563EB", flexShrink: 0,
+          }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#2563EB", letterSpacing: 0.2 }}>
+            {active.name}
+          </span>
+          <span style={{ fontSize: 10, color: "#A8A29E", fontWeight: 500 }}>
+            {fmtTime(active.from)}–{fmtTime(active.to)}
+          </span>
+        </span>
       ) : (
-        <button
-          onClick={() => setShowInput(true)}
-          title="Add new alert"
-          style={{
-            marginRight: 12, flexShrink: 0,
-            display: "inline-flex", alignItems: "center", gap: 4,
-            fontSize: 11, fontWeight: 700,
-            background: "rgba(255,255,255,0.2)", color: "#fff",
-            border: "1.5px solid rgba(255,255,255,0.4)",
-            borderRadius: 6, padding: "3px 10px", cursor: "pointer",
-            transition: "all 0.15s",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.3)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
-        >
-          [+]
-        </button>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "#A8A29E" }}>No active block</span>
       )}
+
+      {/* Next block */}
+      {next && (
+        <>
+          <span style={{ fontSize: 10, color: "#D1D5DB", flexShrink: 0 }}>→</span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "#78716C", flexShrink: 0 }}>
+            {next.name} <span style={{ opacity: 0.6 }}>{fmtTime(next.from)}</span>
+          </span>
+        </>
+      )}
+
+      {/* Divider */}
+      <span style={{ width: 1, height: 16, background: "#E7E5E4", flexShrink: 0, marginLeft: 2 }} />
+
+      {/* Scrollable pill track */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4,
+        flex: 1, overflowX: "auto", overflowY: "hidden",
+        scrollbarWidth: "none",
+      }}>
+        {blocks.map((t, i) => {
+          const from = timeToMinutes(t.from);
+          const to = timeToMinutes(t.to);
+          const isPast = (() => {
+            if (from <= to) return nowMin >= to;
+            return false;
+          })();
+          const isCurrent = i === activeIdx;
+
+          return (
+            <span key={t.id} style={{
+              display: "inline-flex", alignItems: "center", gap: 3,
+              padding: "2px 8px", borderRadius: 20, flexShrink: 0,
+              fontSize: 10, fontWeight: isCurrent ? 700 : 500,
+              background: isCurrent ? "#EFF6FF" : isPast ? "transparent" : "#F5F5F4",
+              color: isCurrent ? "#2563EB" : isPast ? "#C4C4C0" : "#78716C",
+              border: isCurrent ? "1px solid #BFDBFE" : "1px solid transparent",
+              transition: "all 0.2s",
+              textDecoration: isPast ? "line-through" : "none",
+            }}>
+              {isCurrent && (
+                <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#2563EB", flexShrink: 0 }} />
+              )}
+              {t.name}
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1666,8 +1673,8 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#FAFAF9" }}>
-      {/* ─── Fixed Alert Ticker ─── */}
-      <AlertTicker />
+      {/* ─── Sticky Timeline Bar ─── */}
+      <TimelineBar tasks={day?.mainTasks ?? []} />
       <div style={{ display: "flex", flex: 1, paddingTop: 36 }}>
         {/* ─── Sidebar ─── */}
         <aside style={sidebar}>
