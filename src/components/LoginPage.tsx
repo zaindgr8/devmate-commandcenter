@@ -21,7 +21,7 @@ const S = {
   hint: { fontSize: 11, color: "#A8A29E", textAlign: "center" as const, lineHeight: 1.6 },
 };
 
-export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
+export default function LoginPage({ onLogin, notice }: { onLogin: (u: any) => void; notice?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -83,6 +83,7 @@ export default function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
               <input style={S.input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required />
             </div>
 
+            {!error && notice && <div style={{ ...S.error, background: "#FFFBEB", color: "#B45309" }}><AlertCircle size={15} />{notice}</div>}
             {error && <div style={S.error}><AlertCircle size={15} />{error}</div>}
 
             <button type="submit" style={{ ...S.btn, opacity: loading ? 0.6 : 1 }} disabled={loading}>

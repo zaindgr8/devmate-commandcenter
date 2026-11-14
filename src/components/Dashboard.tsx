@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers
+  Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers
 } from "lucide-react";
-import { loadState, saveState, createDayData, logout, calculateStreaks, getToday } from "@/lib/store";
+import { loadState, saveState, createDayData, logout, calculateStreaks, getToday, STATE_CONFLICT_EVENT, STATE_REFRESHED_EVENT } from "@/lib/store";
 import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
@@ -25,6 +25,20 @@ const CATLABEL: Record<string, string> = { Mandatory: "Mandatory", Company: "Com
 
 function fmtDate(d: string) {
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
+function fmtShortDate(d: string) {
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+function shiftDate(d: string, off: number) {
+  const dt = new Date(d + "T12:00:00");
+  dt.setDate(dt.getDate() + off);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+function isTypingTarget(el: EventTarget | null) {
+  const t = el as HTMLElement | null;
+  if (!t) return false;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
 }
 function greeting() { const h = new Date().getHours(); return h < 12 ? "Good Morning" : h < 17 ? "Good Afternoon" : "Good Evening"; }
 
@@ -557,27 +571,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const [mNote, setMNote] = useState("");
   const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
 
-  // Clean Fatima from employees and local session storage
-  useEffect(() => {
-    if (state && state.employees && state.employees.some((e) => e.name.toLowerCase().includes("fatima"))) {
-      save({
-        ...state,
-        employees: state.employees.filter((e) => !e.name.toLowerCase().includes("fatima")),
-      });
-    }
-    if (typeof window !== "undefined") {
-      try {
-        const raw = localStorage.getItem("devmate_auth");
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.name && /fatima/i.test(parsed.name)) {
-            parsed.name = parsed.name.replace(/(\s*(&|and)\s*Fatima|Fatima\s*(&|and)?\s*)/gi, "").trim() || "Zain";
-            localStorage.setItem("devmate_auth", JSON.stringify(parsed));
-          }
-        }
-      } catch {}
-    }
-  }, [state]);
 
   const [activeSlide, setActiveSlide] = useState<"timeline" | "tables">("timeline");
   const [viewportHeight, setViewportHeight] = useState<number | string>("auto");
@@ -613,30 +606,146 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     loadState().then(data => setState(data));
   }, []);
 
+  // ── Undo history + toast ──
+  // Every change is a whole new AppState, so undo is just "go back to the previous one".
+  // Bursts of edits (typing) within a second collapse into one undo step.
+  const stateRef = useRef<AppState | null>(null);
+  const historyRef = useRef<AppState[]>([]);
+  const lastPushRef = useRef(0);
+  const [toast, setToast] = useState<{ id: number; msg: string; undo?: boolean } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { stateRef.current = state; }, [state]);
+
+  const showToast = useCallback((msg: string, undo = false) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), msg, undo });
+    toastTimer.current = setTimeout(() => setToast(null), undo ? 8000 : 4000);
+  }, []);
+
   // saveState is now synchronous (debounces the network call internally)
   // calculateStreaks is expensive — only compute it when explicitly needed,
   // not on every keystroke. Pass `withStreaks=true` only on day/status changes.
-  const save = useCallback((s: AppState, withStreaks = false) => {
-    if (withStreaks) s.streaks = calculateStreaks(s.days);
+  // Pass `undoLabel` for big or destructive actions to show a toast with an Undo button.
+  const save = useCallback((input: AppState, withStreaks = false, undoLabel?: string) => {
+    const s = withStreaks ? { ...input, streaks: calculateStreaks(input.days) } : input;
+    const prev = stateRef.current;
+    const now = Date.now();
+    if (prev && prev !== input && (undoLabel || now - lastPushRef.current > 1000)) {
+      historyRef.current = [...historyRef.current.slice(-49), prev];
+    }
+    lastPushRef.current = now;
+    stateRef.current = s;
     setState(s);
     saveState(s);
+    if (undoLabel) showToast(undoLabel, true);
+  }, [showToast]);
+
+  // Clean Fatima from employees and local session storage
+  useEffect(() => {
+    if (state && state.employees && state.employees.some((e) => e.name.toLowerCase().includes("fatima"))) {
+      save({
+        ...state,
+        employees: state.employees.filter((e) => !e.name.toLowerCase().includes("fatima")),
+      });
+    }
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("devmate_auth");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.name && /fatima/i.test(parsed.name)) {
+            parsed.name = parsed.name.replace(/(\s*(&|and)\s*Fatima|Fatima\s*(&|and)?\s*)/gi, "").trim() || "Zain";
+            localStorage.setItem("devmate_auth", JSON.stringify(parsed));
+          }
+        }
+      } catch {}
+    }
+  }, [state]);
+
+  const undo = useCallback(() => {
+    const prev = historyRef.current.pop();
+    if (!prev) { showToast("Nothing to undo"); return; }
+    const cur = stateRef.current;
+    // Keep the day you're looking at unless the undone change was a day jump.
+    const restored = { ...prev, streaks: calculateStreaks(prev.days) };
+    stateRef.current = restored;
+    lastPushRef.current = 0;
+    setState(restored);
+    saveState(restored);
+    showToast(cur && cur.currentDate !== prev.currentDate ? `Undone · back to ${fmtShortDate(prev.currentDate)}` : "Undone");
+  }, [showToast]);
+
+  // Day navigation is view-only: it doesn't write to the database.
+  const goToDate = useCallback((nd: string) => {
+    setState((prev) => {
+      if (!prev) return prev;
+      const days = prev.days[nd] ? prev.days : { ...prev.days, [nd]: createDayData(nd) };
+      const next = { ...prev, currentDate: nd, days };
+      stateRef.current = next;
+      return next;
+    });
   }, []);
+
+  // Another tab/device saved newer data: adopt it (keeping the day being viewed).
+  useEffect(() => {
+    const adopt = (latest: AppState) => {
+      const viewing = stateRef.current?.currentDate || latest.currentDate;
+      const days = latest.days[viewing] ? latest.days : { ...latest.days, [viewing]: createDayData(viewing) };
+      const next = { ...latest, currentDate: viewing, days };
+      historyRef.current = []; // old snapshots would overwrite the newer data
+      stateRef.current = next;
+      setState(next);
+    };
+    const onConflict = (e: Event) => {
+      adopt((e as CustomEvent<AppState>).detail);
+      showToast("Changes were made in another tab or device. Loaded the latest; your last edit wasn't saved, please redo it.");
+    };
+    const onRefresh = (e: Event) => {
+      adopt((e as CustomEvent<AppState>).detail);
+      showToast("Synced latest changes");
+    };
+    window.addEventListener(STATE_CONFLICT_EVENT, onConflict);
+    window.addEventListener(STATE_REFRESHED_EVENT, onRefresh);
+    return () => {
+      window.removeEventListener(STATE_CONFLICT_EVENT, onConflict);
+      window.removeEventListener(STATE_REFRESHED_EVENT, onRefresh);
+    };
+  }, [showToast]);
+
+  const tabRef = useRef(tab);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+
+  // Keyboard shortcuts (ignored while typing in a field):
+  //   ← / →  previous / next day     T  today     N  new task     ⌘Z / Ctrl+Z  undo
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        if (isTypingTarget(e.target)) return; // let fields undo their own text
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      const cur = stateRef.current;
+      if (!cur || tabRef.current !== "tasks") return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); goToDate(shiftDate(cur.currentDate, -1)); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); goToDate(shiftDate(cur.currentDate, 1)); }
+      else if (e.key === "t" || e.key === "T") goToDate(getToday());
+      else if (e.key === "n" || e.key === "N") {
+        const el = document.getElementById("daily-task-input") as HTMLInputElement | null;
+        if (el) { e.preventDefault(); el.focus(); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, goToDate]);
 
   if (!state) return null;
   const day = state.days[state.currentDate] || createDayData(state.currentDate);
   const isToday = state.currentDate === getToday();
 
-  const go = (off: number) => {
-    const d = new Date(state.currentDate + "T12:00:00");
-    d.setDate(d.getDate() + off);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const nd = `${year}-${month}-${day}`;
-    const ns = { ...state, currentDate: nd };
-    if (!ns.days[nd]) ns.days[nd] = createDayData(nd);
-    save(ns); // no streak recalc needed on navigation
-  };
+  const go = (off: number) => goToDate(shiftDate(state.currentDate, off));
 
   const doneForToday = () => {
     const todayKey = state.currentDate;
@@ -828,7 +937,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
     const existingNext = state.days[nextKey] || createDayData(nextKey);
     const existingNextSubs = existingNext.subTasks || [];
 
-    let newNextSubTasks: SubTask[] = [];
+    const newNextSubTasks: SubTask[] = [];
 
     if (existingNextSubs.length === 0) {
       for (const cb of carriedBlocks) {
@@ -925,14 +1034,20 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
       events: [...carriedEvents, ...(existingNext.events || [])],
     };
 
-    save({
-      ...state,
-      days: { ...state.days, [todayKey]: updatedToday, [nextKey]: updatedNext },
-      currentDate: nextKey,
-    });
+    const movedCount = totalCarriedTasks + carriedNotes.length + carriedMeetings.length + carriedEvents.length;
+    save(
+      {
+        ...state,
+        days: { ...state.days, [todayKey]: updatedToday, [nextKey]: updatedNext },
+        currentDate: nextKey,
+      },
+      false,
+      `Moved ${movedCount} unfinished item${movedCount === 1 ? "" : "s"} to ${fmtShortDate(nextKey)}`
+    );
   };
   // setDay: used for text edits, chip adds, etc. — no streak recalc
-  const setDay = (fn: (d: typeof day) => typeof day) => save({ ...state, days: { ...state.days, [state.currentDate]: fn({ ...day }) } });
+  const setDay = (fn: (d: typeof day) => typeof day, undoLabel?: string) =>
+    save({ ...state, days: { ...state.days, [state.currentDate]: fn({ ...day }) } }, false, undoLabel);
 
   const addMeeting = (m: Omit<Meeting, "id">) => {
     const targetDate = m.date || state.currentDate;
@@ -1640,20 +1755,19 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const setGoalLink = (id: string, goalId: string) => setDay((d) => ({ ...d, mainTasks: d.mainTasks.map((t) => t.id === id ? { ...t, goalLink: goalId } : t) }));
   const delMain = (id: string) => {
     const t = day.mainTasks.find((t) => t.id === id);
-    if (!window.confirm(`Delete "${t?.name || "this task"}"?`)) return;
-    setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }));
+    setDay((d) => ({ ...d, mainTasks: d.mainTasks.filter((t) => t.id !== id) }), `Deleted "${t?.name || "task"}"`);
   };
   const addMain = (category: "Mandatory" | "Company" | "Misc") => setDay((d) => ({ ...d, mainTasks: [...d.mainTasks, { id: "t_" + Date.now(), category, name: "New Task", status: "not_started", from: "12:00", to: "13:00", goalLink: "" }] }));
   const setCategoryLabel = (cat: string, label: string) => save({ ...state, categoryLabels: { ...(state.categoryLabels || {}), [cat]: label } });
 
   const delSub = (id: string) => {
-    if (!window.confirm("Delete this task?")) return;
-    setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }));
+    const t = day.subTasks.find((s) => s.id === id);
+    const name = t?.text ? (t.text.length > 40 ? t.text.slice(0, 40) + "…" : t.text) : "task";
+    setDay((d) => ({ ...d, subTasks: d.subTasks.filter((s) => s.id !== id) }), `Deleted "${name}"`);
   };
   const rate = (r: number) => setDay((d) => ({ ...d, rating: r }));
   const delNote = (id: string) => {
-    if (!window.confirm("Delete this note?")) return;
-    setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }));
+    setDay((d) => ({ ...d, managerNotes: d.managerNotes.filter((n) => n.id !== id) }), "Deleted note");
   };
 
   const actionableMainTasks = day.mainTasks.filter(t => t.name.toLowerCase() !== "sleep");
@@ -1661,6 +1775,10 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const totalM = actionableMainTasks.length;
   const doneS = day.subTasks.filter(i => !i.isSection && i.status === "done").length;
   const totalS = day.subTasks.filter(i => !i.isSection).length;
+  // Today is empty but tomorrow has tasks (usually after "Done For Today"): point there.
+  const tomorrowKey = shiftDate(getToday(), 1);
+  const tomorrowCount = (state.days[tomorrowKey]?.subTasks || []).filter((t) => !t.isSection && t.status !== "done").length;
+  const tomorrowHint = isToday && totalS === 0 && tomorrowCount > 0 ? { date: tomorrowKey, count: tomorrowCount } : null;
 
   const grouped = day.mainTasks.reduce((a, t) => { (a[t.category] ??= []).push(t); return a; }, {} as Record<string, MainTask[]>);
 
@@ -1767,7 +1885,32 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         <span style={{ fontSize: 13, fontWeight: 500, color: "#78716C" }}>{fmtDate(state.currentDate)}</span>
                         {isToday && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#EFF6FF", color: "#2563EB" }}>Today</span>}
                         <button onClick={() => go(1)} style={{ padding: 2, cursor: "pointer" }}><ChevronRight size={16} color="#A8A29E" /></button>
+                        {!isToday && (
+                          <button
+                            onClick={() => goToDate(getToday())}
+                            title="Jump to today (T)"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 10, background: "#2563EB", color: "#fff", cursor: "pointer" }}
+                          >
+                            <CalendarCheck size={12} /> Back to today
+                          </button>
+                        )}
                       </div>
+                      {totalS > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }} title={`${doneS} of ${totalS} todos done`}>
+                          <div style={{ width: 160, height: 6, borderRadius: 3, background: "#F0EEEC", overflow: "hidden" }}>
+                            <div style={{ width: `${Math.round((doneS / totalS) * 100)}%`, height: "100%", background: doneS === totalS ? "#16A34A" : "#2563EB", transition: "width .3s" }} />
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "#78716C" }}>{doneS}/{totalS} todos done</span>
+                        </div>
+                      )}
+                      {tomorrowHint && (
+                        <button
+                          onClick={() => goToDate(tomorrowHint.date)}
+                          style={{ marginTop: 10, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", padding: "5px 10px", borderRadius: 8, cursor: "pointer" }}
+                        >
+                          {tomorrowHint.count} task{tomorrowHint.count === 1 ? "" : "s"} waiting on {fmtShortDate(tomorrowHint.date)} <ArrowRight size={12} />
+                        </button>
+                      )}
                     </div>
                     {/* Day rating */}
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
@@ -2465,6 +2608,33 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
           </div>
         </main>
       </div>
+
+      {/* ─── Toast (undo / sync messages) ─── */}
+      {toast && (
+        <div
+          key={toast.id}
+          role="status"
+          style={{
+            position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 1000,
+            display: "flex", alignItems: "center", gap: 14, maxWidth: "min(560px, calc(100vw - 32px))",
+            background: "#1C1917", color: "#fff", padding: "10px 12px 10px 16px", borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.25)", fontSize: 13,
+          }}
+        >
+          <span style={{ flex: 1 }}>{toast.msg}</span>
+          {toast.undo && (
+            <button
+              onClick={() => { setToast(null); undo(); }}
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, color: "#93C5FD", padding: "4px 8px", borderRadius: 8, cursor: "pointer" }}
+            >
+              <Undo2 size={13} /> Undo
+            </button>
+          )}
+          <button onClick={() => setToast(null)} title="Dismiss" style={{ color: "#A8A29E", padding: 2, cursor: "pointer", display: "flex" }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -5924,8 +6094,9 @@ function DailyTodos({
           <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
             <input
               ref={taskInputRef}
+              id="daily-task-input"
               type="text"
-              placeholder="Assign Task… e.g. Events (Luma | MeetUp | WhatsApp) or type @"
+              placeholder="Assign Task… e.g. Events (Luma | MeetUp | WhatsApp) or type @   (press N from anywhere)"
               value={taskInput}
               onChange={handleTaskInputChange}
               onKeyDown={(e) => {

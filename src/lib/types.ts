@@ -125,7 +125,46 @@ export interface Employee {
   name: string;
 }
 
+export type ContentPlatform = "Instagram" | "YouTube" | "TikTok" | "LinkedIn" | "X" | "Other";
+export type ContentFormat = "Reel" | "Short" | "Long-form" | "Carousel" | "Story" | "Post" | "Video";
+// Pipeline stages. Array order in AppState.contentIdeas is the queue order.
+export type ContentStage = "idea" | "script" | "shoot" | "edit" | "ready" | "posted" | "archived";
+
+export interface ContentLink {
+  id: string;
+  label: string;
+  url: string;
+}
+
+export interface ContentIdea {
+  id: string;
+  title: string;
+  hook?: string;
+  description?: string; // outline / script
+  notes?: string;
+  platform: ContentPlatform;
+  format: ContentFormat;
+  stage: ContentStage;
+  links: ContentLink[];
+  creatorIds?: string[]; // ContentCreator ids this idea is inspired by
+  targetDate?: string; // YYYY-MM-DD
+  postedDate?: string; // YYYY-MM-DD
+  postedUrl?: string;
+  createdAt: number;
+}
+
+export interface ContentCreator {
+  id: string;
+  name: string;
+  platform: ContentPlatform;
+  url: string;
+  niche?: string;
+  notes?: string;
+  lastChecked?: string; // YYYY-MM-DD
+}
+
 export interface AppState {
+  _rev?: number; // server-side revision, used to stop stale tabs/devices overwriting newer saves
   currentDate: string;
   days: Record<string, DayData>;
   goals: Goal[];
@@ -134,6 +173,8 @@ export interface AppState {
   appTrackers?: AppTracker[];
   projectResources?: ProjectResource[];
   contentPostedDates?: string[]; // Array of date strings like "2026-04-21"
+  contentIdeas?: ContentIdea[]; // ordered queue
+  contentCreators?: ContentCreator[]; // inspiration sources to check
   projects?: Project[];
   employees?: Employee[];
   recurringEvents?: EventItem[];
