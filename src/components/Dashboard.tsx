@@ -3,10 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers
+  Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers, Flag, GripVertical
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks, getToday, STATE_CONFLICT_EVENT, STATE_REFRESHED_EVENT } from "@/lib/store";
-import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
+import { AppState, Goal, Priority, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
 import AppTrackerPanel from "./AppTrackerPanel";
@@ -570,6 +570,7 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const [tab, setTab] = useState<"tasks" | "goals" | "apptracker" | "content" | "history" | "projects" | "employees">("tasks");
   const [mNote, setMNote] = useState("");
   const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
+  const [draggedPriority, setDraggedPriority] = useState<string | null>(null);
 
 
   const [activeSlide, setActiveSlide] = useState<"timeline" | "tables">("timeline");
@@ -2600,6 +2601,34 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     }}
                     onReorderGoals={(newGoals) => {
                       save({ ...state, goals: newGoals });
+                    }}
+                  />
+
+                  {/* ─── PRIORITIES SECTION (Displayed directly after Goals) ─── */}
+                  <PrioritiesOverviewSection
+                    priorities={state.priorities || []}
+                    cardStyle={card}
+                    inputStyle={inp}
+                    draggedPriority={draggedPriority}
+                    setDraggedPriority={setDraggedPriority}
+                    onAddPriority={(text) => {
+                      const p: Priority = { id: "p_" + Date.now(), text };
+                      save({ ...state, priorities: [...(state.priorities || []), p] });
+                    }}
+                    onUpdatePriority={(id, text) => {
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).map((p) => (p.id === id ? { ...p, text } : p)),
+                      });
+                    }}
+                    onDeletePriority={(id) => {
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).filter((p) => p.id !== id),
+                      });
+                    }}
+                    onReorderPriorities={(newPriorities) => {
+                      save({ ...state, priorities: newPriorities });
                     }}
                   />
 
@@ -5504,6 +5533,384 @@ function GoalsOverviewSection({
                           }}
                         />
                       </div>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Priorities Overview Section Component (Displayed After Goals) ─── */
+interface PrioritiesOverviewSectionProps {
+  priorities: Priority[];
+  cardStyle: React.CSSProperties;
+  inputStyle: React.CSSProperties;
+  draggedPriority: string | null;
+  setDraggedPriority: (id: string | null) => void;
+  onAddPriority: (text: string) => void;
+  onUpdatePriority: (id: string, text: string) => void;
+  onDeletePriority: (id: string) => void;
+  onReorderPriorities: (newPriorities: Priority[]) => void;
+}
+
+function PrioritiesOverviewSection({
+  priorities,
+  cardStyle,
+  inputStyle,
+  draggedPriority,
+  setDraggedPriority,
+  onAddPriority,
+  onUpdatePriority,
+  onDeletePriority,
+  onReorderPriorities,
+}: PrioritiesOverviewSectionProps) {
+  const [prioritiesOpen, setPrioritiesOpen] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newText, setNewText] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+
+  const handleCreate = () => {
+    if (!newText.trim()) return;
+    onAddPriority(newText.trim());
+    setNewText("");
+    setShowAddForm(false);
+  };
+
+  const handleSaveEdit = (id: string) => {
+    if (!editText.trim()) return;
+    onUpdatePriority(id, editText.trim());
+    setEditingId(null);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, borderTop: "1px solid #E7E5E4", paddingTop: 18, marginTop: 16 }}>
+      {/* ── Top Header Toolbar matching Goals ── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: prioritiesOpen ? 4 : 0,
+        }}
+      >
+        <div
+          onClick={() => setPrioritiesOpen(!prioritiesOpen)}
+          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
+          title="Click dropdown chevron to toggle Priorities"
+        >
+          <button
+            type="button"
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              color: "#78716C",
+            }}
+          >
+            {prioritiesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <Flag size={13} color="#2563EB" />
+          <h3
+            style={{
+              fontSize: 10,
+              fontWeight: 800,
+              textTransform: "uppercase",
+              letterSpacing: 1.2,
+              color: "#78716C",
+              margin: 0,
+            }}
+          >
+            Priorities
+          </h3>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: "1px 6px",
+              borderRadius: 10,
+              background: "#EFF6FF",
+              color: "#2563EB",
+            }}
+          >
+            {priorities.length}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {!showAddForm && (
+            <button
+              onClick={() => {
+                setPrioritiesOpen(true);
+                setShowAddForm(true);
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#2563EB",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 2,
+              }}
+              title="Add a new priority"
+            >
+              <Plus size={12} /> Add
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Section Body ── */}
+      {prioritiesOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Quick Add Priority Form */}
+          {showAddForm && (
+            <div
+              style={{
+                ...cardStyle,
+                padding: 12,
+                background: "#FAFAF9",
+                border: "1.5px solid #DBEAFE",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#1E3A8A" }}>New Priority</span>
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#78716C", padding: 0 }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Priority (e.g. Close Ashul pilot)"
+                value={newText}
+                onChange={(e) => setNewText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") setShowAddForm(false); }}
+                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }}
+                autoFocus
+              />
+
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                <button
+                  onClick={handleCreate}
+                  style={{
+                    flex: 1,
+                    padding: "6px 0",
+                    borderRadius: 7,
+                    border: "none",
+                    background: "#2563EB",
+                    color: "#fff",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  Save Priority
+                </button>
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 7,
+                    border: "1px solid #E7E5E4",
+                    background: "#fff",
+                    color: "#78716C",
+                    fontSize: 11,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Priorities List */}
+          {priorities.length === 0 ? (
+            <div
+              style={{
+                textAlign: "center",
+                padding: "16px 0",
+                color: "#A8A29E",
+                border: "1px dashed #E7E5E4",
+                borderRadius: 10,
+              }}
+            >
+              <Flag size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
+              <p style={{ fontSize: 11, margin: 0 }}>No priorities yet. Add your first one.</p>
+            </div>
+          ) : (
+            priorities.map((priority, index) => {
+              const isEditing = editingId === priority.id;
+
+              return (
+                <div
+                  key={priority.id}
+                  draggable={!isEditing}
+                  onDragStart={(e) => {
+                    setDraggedPriority(priority.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedPriority && draggedPriority !== priority.id) {
+                      const newPriorities = [...priorities];
+                      const sIdx = newPriorities.findIndex((p) => p.id === draggedPriority);
+                      const tIdx = newPriorities.findIndex((p) => p.id === priority.id);
+                      if (sIdx !== -1 && tIdx !== -1) {
+                        const [rem] = newPriorities.splice(sIdx, 1);
+                        newPriorities.splice(tIdx, 0, rem);
+                        onReorderPriorities(newPriorities);
+                      }
+                    }
+                    setDraggedPriority(null);
+                  }}
+                  onDragEnd={() => setDraggedPriority(null)}
+                  style={{
+                    ...cardStyle,
+                    padding: "10px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    position: "relative",
+                    opacity: draggedPriority === priority.id ? 0.4 : 1,
+                    cursor: isEditing ? "default" : "grab",
+                    transition: "box-shadow 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    const btns = e.currentTarget.querySelectorAll(".priority-action-btn") as NodeListOf<HTMLElement>;
+                    btns.forEach((b) => { b.style.opacity = "1"; });
+                  }}
+                  onMouseLeave={(e) => {
+                    const btns = e.currentTarget.querySelectorAll(".priority-action-btn") as NodeListOf<HTMLElement>;
+                    btns.forEach((b) => { b.style.opacity = "0"; });
+                  }}
+                >
+                  <GripVertical size={14} color="#D6D3D1" style={{ flexShrink: 0 }} />
+
+                  {/* Rank */}
+                  <span
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      background: "#EFF6FF",
+                      color: "#2563EB",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {index + 1}
+                  </span>
+
+                  {isEditing ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                      <input
+                        autoFocus
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSaveEdit(priority.id); if (e.key === "Escape") setEditingId(null); }}
+                        style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", flex: 1, minWidth: 0 }}
+                      />
+                      <button
+                        onClick={() => handleSaveEdit(priority.id)}
+                        style={{
+                          padding: "3px 10px",
+                          fontSize: 10,
+                          fontWeight: 600,
+                          background: "#2563EB",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: 5,
+                          cursor: "pointer",
+                          flexShrink: 0,
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingId(null)}
+                        style={{
+                          padding: "3px 8px",
+                          fontSize: 10,
+                          background: "none",
+                          border: "1px solid #E7E5E4",
+                          borderRadius: 5,
+                          cursor: "pointer",
+                          color: "#78716C",
+                          flexShrink: 0,
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span
+                        onDoubleClick={() => {
+                          setEditingId(priority.id);
+                          setEditText(priority.text);
+                        }}
+                        title="Double-click to edit priority"
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: "#1C1917",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          cursor: "pointer",
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {priority.text}
+                      </span>
+
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete priority "${priority.text}"?`)) {
+                            onDeletePriority(priority.id);
+                          }
+                        }}
+                        className="priority-action-btn"
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "#EF4444",
+                          opacity: 0,
+                          cursor: "pointer",
+                          padding: 2,
+                          borderRadius: 4,
+                          transition: "opacity 0.1s",
+                          flexShrink: 0,
+                        }}
+                        title="Delete priority"
+                      >
+                        <Trash2 size={11} />
+                      </button>
                     </>
                   )}
                 </div>

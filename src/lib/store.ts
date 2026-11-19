@@ -111,6 +111,9 @@ export async function loadState(): Promise<AppState> {
       if (!parsed.recurringEvents) {
         parsed.recurringEvents = [];
       }
+      if (!parsed.priorities) {
+        parsed.priorities = [];
+      }
       return cleanStateOfFatima(parsed);
     }
   } catch(err) {
@@ -155,6 +158,9 @@ export async function loadState(): Promise<AppState> {
        if (!parsed.recurringEvents) {
          parsed.recurringEvents = [];
        }
+       if (!parsed.priorities) {
+         parsed.priorities = [];
+       }
        const cleaned = cleanStateOfFatima(parsed);
        saveState(cleaned);
        return cleaned;
@@ -166,6 +172,7 @@ export async function loadState(): Promise<AppState> {
     currentDate: td,
     days: { [td]: createDayData(td) },
     goals: [...DEFAULT_GOALS],
+    priorities: [],
     streaks: { sleep: 0, workout: 0 },
     categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" },
     appTrackers: [],

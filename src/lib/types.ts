@@ -48,6 +48,11 @@ export interface Goal {
   color: string;
 }
 
+export interface Priority {
+  id: string;
+  text: string;
+}
+
 export interface ManagerNote {
   id: string;
   date: string;
@@ -168,6 +173,7 @@ export interface AppState {
   currentDate: string;
   days: Record<string, DayData>;
   goals: Goal[];
+  priorities?: Priority[];
   streaks: Record<string, number>; // task id -> streak count
   categoryLabels?: Record<string, string>;
   appTrackers?: AppTracker[];
