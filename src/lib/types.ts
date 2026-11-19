@@ -48,9 +48,15 @@ export interface Goal {
   color: string;
 }
 
+export interface PrioritySubItem {
+  id: string;
+  text: string;
+}
+
 export interface Priority {
   id: string;
   text: string;
+  subItems?: PrioritySubItem[];
 }
 
 export interface ManagerNote {
