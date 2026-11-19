@@ -6,7 +6,7 @@ import {
   Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers, Flag, GripVertical
 } from "lucide-react";
 import { loadState, saveState, createDayData, logout, calculateStreaks, getToday, STATE_CONFLICT_EVENT, STATE_REFRESHED_EVENT } from "@/lib/store";
-import { AppState, Goal, Priority, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
+import { AppState, Goal, Priority, PrioritySubItem, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
 import TimelineView from "./TimelineView";
 import AppTrackerPanel from "./AppTrackerPanel";
@@ -2629,6 +2629,41 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                     }}
                     onReorderPriorities={(newPriorities) => {
                       save({ ...state, priorities: newPriorities });
+                    }}
+                    onAddSubItem={(pid, text) => {
+                      const sub: PrioritySubItem = { id: "ps_" + Date.now(), text };
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).map((p) =>
+                          p.id === pid ? { ...p, subItems: [...(p.subItems || []), sub] } : p
+                        ),
+                      });
+                    }}
+                    onUpdateSubItem={(pid, sid, text) => {
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).map((p) =>
+                          p.id === pid
+                            ? { ...p, subItems: (p.subItems || []).map((s) => (s.id === sid ? { ...s, text } : s)) }
+                            : p
+                        ),
+                      });
+                    }}
+                    onDeleteSubItem={(pid, sid) => {
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).map((p) =>
+                          p.id === pid ? { ...p, subItems: (p.subItems || []).filter((s) => s.id !== sid) } : p
+                        ),
+                      });
+                    }}
+                    onReorderSubItems={(pid, newSubs) => {
+                      save({
+                        ...state,
+                        priorities: (state.priorities || []).map((p) =>
+                          p.id === pid ? { ...p, subItems: newSubs } : p
+                        ),
+                      });
                     }}
                   />
 
@@ -5556,6 +5591,10 @@ interface PrioritiesOverviewSectionProps {
   onUpdatePriority: (id: string, text: string) => void;
   onDeletePriority: (id: string) => void;
   onReorderPriorities: (newPriorities: Priority[]) => void;
+  onAddSubItem: (priorityId: string, text: string) => void;
+  onUpdateSubItem: (priorityId: string, subId: string, text: string) => void;
+  onDeleteSubItem: (priorityId: string, subId: string) => void;
+  onReorderSubItems: (priorityId: string, newSubItems: PrioritySubItem[]) => void;
 }
 
 function PrioritiesOverviewSection({
@@ -5568,12 +5607,39 @@ function PrioritiesOverviewSection({
   onUpdatePriority,
   onDeletePriority,
   onReorderPriorities,
+  onAddSubItem,
+  onUpdateSubItem,
+  onDeleteSubItem,
+  onReorderSubItems,
 }: PrioritiesOverviewSectionProps) {
   const [prioritiesOpen, setPrioritiesOpen] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newText, setNewText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+
+  // Sub-items: which priorities are expanded, drag state, add/edit state
+  const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+  const [draggedSub, setDraggedSub] = useState<{ pid: string; sid: string } | null>(null);
+  const [addingSubId, setAddingSubId] = useState<string | null>(null);
+  const [newSubText, setNewSubText] = useState("");
+  const [editingSub, setEditingSub] = useState<{ pid: string; sid: string } | null>(null);
+  const [editSubText, setEditSubText] = useState("");
+
+  const toggleExpand = (id: string) => setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+
+  const handleCreateSub = () => {
+    if (!newSubText.trim() || !addingSubId) return;
+    onAddSubItem(addingSubId, newSubText.trim());
+    setNewSubText("");
+    setAddingSubId(null);
+  };
+
+  const handleSaveSubEdit = () => {
+    if (!editSubText.trim() || !editingSub) return;
+    onUpdateSubItem(editingSub.pid, editingSub.sid, editSubText.trim());
+    setEditingSub(null);
+  };
 
   const handleCreate = () => {
     if (!newText.trim()) return;
@@ -5759,10 +5825,12 @@ function PrioritiesOverviewSection({
           ) : (
             priorities.map((priority, index) => {
               const isEditing = editingId === priority.id;
+              const expanded = !!expandedIds[priority.id];
+              const subItems = priority.subItems || [];
 
               return (
+                <div key={priority.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div
-                  key={priority.id}
                   draggable={!isEditing}
                   onDragStart={(e) => {
                     setDraggedPriority(priority.id);
@@ -5804,6 +5872,23 @@ function PrioritiesOverviewSection({
                     btns.forEach((b) => { b.style.opacity = "0"; });
                   }}
                 >
+                  <button
+                    onClick={() => toggleExpand(priority.id)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      color: "#78716C",
+                      flexShrink: 0,
+                    }}
+                    title={expanded ? "Collapse sub-items" : "Expand sub-items"}
+                  >
+                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+
                   <GripVertical size={14} color="#D6D3D1" style={{ flexShrink: 0 }} />
 
                   {/* Rank */}
@@ -5888,6 +5973,11 @@ function PrioritiesOverviewSection({
                       >
                         {priority.text}
                       </span>
+                      {subItems.length > 0 && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#A8A29E", flexShrink: 0 }}>
+                          {subItems.length}
+                        </span>
+                      )}
 
                       <button
                         onClick={() => {
@@ -5913,6 +6003,217 @@ function PrioritiesOverviewSection({
                       </button>
                     </>
                   )}
+                </div>
+
+                {/* Sub-items (expandable, draggable within this priority) */}
+                {expanded && (
+                  <div style={{ marginLeft: 34, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {subItems.map((sub) => {
+                      const isSubEditing = editingSub?.pid === priority.id && editingSub?.sid === sub.id;
+                      return (
+                        <div
+                          key={sub.id}
+                          draggable={!isSubEditing}
+                          onDragStart={(e) => {
+                            setDraggedSub({ pid: priority.id, sid: sub.id });
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (draggedSub && draggedSub.pid === priority.id && draggedSub.sid !== sub.id) {
+                              const newSubs = [...subItems];
+                              const sIdx = newSubs.findIndex((s) => s.id === draggedSub.sid);
+                              const tIdx = newSubs.findIndex((s) => s.id === sub.id);
+                              if (sIdx !== -1 && tIdx !== -1) {
+                                const [rem] = newSubs.splice(sIdx, 1);
+                                newSubs.splice(tIdx, 0, rem);
+                                onReorderSubItems(priority.id, newSubs);
+                              }
+                            }
+                            setDraggedSub(null);
+                          }}
+                          onDragEnd={() => setDraggedSub(null)}
+                          style={{
+                            ...cardStyle,
+                            padding: "7px 10px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            background: "#FAFAF9",
+                            opacity: draggedSub?.sid === sub.id ? 0.4 : 1,
+                            cursor: isSubEditing ? "default" : "grab",
+                            transition: "box-shadow 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            const btns = e.currentTarget.querySelectorAll(".priority-sub-action-btn") as NodeListOf<HTMLElement>;
+                            btns.forEach((b) => { b.style.opacity = "1"; });
+                          }}
+                          onMouseLeave={(e) => {
+                            const btns = e.currentTarget.querySelectorAll(".priority-sub-action-btn") as NodeListOf<HTMLElement>;
+                            btns.forEach((b) => { b.style.opacity = "0"; });
+                          }}
+                        >
+                          <GripVertical size={12} color="#D6D3D1" style={{ flexShrink: 0 }} />
+                          {isSubEditing ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                              <input
+                                autoFocus
+                                value={editSubText}
+                                onChange={(e) => setEditSubText(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") handleSaveSubEdit(); if (e.key === "Escape") setEditingSub(null); }}
+                                style={{ ...inputStyle, fontSize: 11, padding: "4px 6px", flex: 1, minWidth: 0 }}
+                              />
+                              <button
+                                onClick={handleSaveSubEdit}
+                                style={{
+                                  padding: "3px 10px",
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  background: "#2563EB",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 5,
+                                  cursor: "pointer",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingSub(null)}
+                                style={{
+                                  padding: "3px 8px",
+                                  fontSize: 10,
+                                  background: "none",
+                                  border: "1px solid #E7E5E4",
+                                  borderRadius: 5,
+                                  cursor: "pointer",
+                                  color: "#78716C",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <span
+                                onDoubleClick={() => {
+                                  setEditingSub({ pid: priority.id, sid: sub.id });
+                                  setEditSubText(sub.text);
+                                }}
+                                title="Double-click to edit sub-item"
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 500,
+                                  color: "#1C1917",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  cursor: "pointer",
+                                  flex: 1,
+                                  minWidth: 0,
+                                }}
+                              >
+                                {sub.text}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Delete sub-item "${sub.text}"?`)) {
+                                    onDeleteSubItem(priority.id, sub.id);
+                                  }
+                                }}
+                                className="priority-sub-action-btn"
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "#EF4444",
+                                  opacity: 0,
+                                  cursor: "pointer",
+                                  padding: 2,
+                                  borderRadius: 4,
+                                  transition: "opacity 0.1s",
+                                  flexShrink: 0,
+                                }}
+                                title="Delete sub-item"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {addingSubId === priority.id ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Sub-item (e.g. Mirrors)"
+                          value={newSubText}
+                          onChange={(e) => setNewSubText(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") handleCreateSub(); if (e.key === "Escape") setAddingSubId(null); }}
+                          style={{ ...inputStyle, fontSize: 11, padding: "4px 6px", flex: 1, minWidth: 0 }}
+                        />
+                        <button
+                          onClick={handleCreateSub}
+                          style={{
+                            padding: "4px 10px",
+                            fontSize: 10,
+                            fontWeight: 600,
+                            background: "#2563EB",
+                            color: "#fff",
+                            border: "none",
+                            borderRadius: 5,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setAddingSubId(null)}
+                          style={{
+                            padding: "4px 8px",
+                            fontSize: 10,
+                            background: "none",
+                            border: "1px solid #E7E5E4",
+                            borderRadius: 5,
+                            cursor: "pointer",
+                            color: "#78716C",
+                            flexShrink: 0,
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setAddingSubId(priority.id);
+                          setNewSubText("");
+                        }}
+                        style={{
+                          alignSelf: "flex-start",
+                          background: "none",
+                          border: "none",
+                          color: "#2563EB",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 2,
+                          padding: "2px 0",
+                        }}
+                        title="Add a sub-item"
+                      >
+                        <Plus size={11} /> Add sub-item
+                      </button>
+                    )}
+                  </div>
+                )}
                 </div>
               );
             })
