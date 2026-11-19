@@ -65,6 +65,7 @@ export function createEmptyState(): AppState {
     currentDate: td,
     days: { [td]: createDayData(td) },
     goals: [...DEFAULT_GOALS],
+    priorities: [],
     streaks: { sleep: 0, workout: 0 },
     categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" },
     appTrackers: [],
@@ -100,5 +101,6 @@ export function normalizeState(parsed: AppState): AppState {
   if (!parsed.projects) parsed.projects = [];
   if (!parsed.employees) parsed.employees = [];
   if (!parsed.recurringEvents) parsed.recurringEvents = [];
+  if (!parsed.priorities) parsed.priorities = [];
   return cleanStateOfFatima(parsed);
 }
