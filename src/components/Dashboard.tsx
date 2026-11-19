@@ -2237,6 +2237,44 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                       arr.splice(to, 0, item);
                       return { ...d, managerNotes: arr };
                     })}
+                    onMoveChip={(list, fromRowIdx, fromChipIdx, toRowIdx, toChipIdx) => {
+                      setDay((d) => {
+                        const isDaily = list === "daily";
+                        const arr: any[] = [...(isDaily ? d.subTasks : d.managerNotes)];
+                        const fromRow = arr[fromRowIdx];
+                        const toRow = arr[toRowIdx];
+                        if (!fromRow || !toRow || !fromRow.chips || !toRow.chips) return d;
+                        if (fromRowIdx === toRowIdx && fromChipIdx === toChipIdx) return d;
+                        const chip = fromRow.chips[fromChipIdx];
+                        if (!chip) return d;
+                        const fromChips = fromRow.chips.filter((_: any, i: number) => i !== fromChipIdx);
+                        let insertAt = toChipIdx;
+                        if (fromRowIdx === toRowIdx && fromChipIdx < toChipIdx) insertAt = toChipIdx - 1;
+                        const toChips = fromRowIdx === toRowIdx ? [...fromChips] : [...toRow.chips];
+                        toChips.splice(insertAt, 0, chip);
+                        const textKey = isDaily ? "text" : "content";
+                        const deriveStatus = (chips: any[]): Status => {
+                          if (chips.length === 0) return "not_started";
+                          if (chips.every((c) => c.status === "done")) return "done";
+                          if (chips.some((c) => c.status === "doing" || c.status === "done")) return "doing";
+                          return "not_started";
+                        };
+                        const next = arr.map((row, i) => {
+                          if (i === fromRowIdx && i === toRowIdx) {
+                            return { ...row, chips: toChips, [textKey]: toChips.map((c: any) => c.text).join(", "), status: deriveStatus(toChips) };
+                          }
+                          if (i === fromRowIdx) {
+                            return { ...row, chips: fromChips, [textKey]: fromChips.map((c: any) => c.text).join(", "), status: deriveStatus(fromChips) };
+                          }
+                          if (i === toRowIdx) {
+                            return { ...row, chips: toChips, [textKey]: toChips.map((c: any) => c.text).join(", ") };
+                          }
+                          return row;
+                        });
+                        if (isDaily) return { ...d, subTasks: next };
+                        return { ...d, managerNotes: next };
+                      });
+                    }}
                     onEditEmployee={(id, list, newEmployee) => {
                       if (list === "daily") {
                         setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => s.id === id ? { ...s, employee: newEmployee || undefined } : s) }));
@@ -6069,6 +6107,7 @@ function DailyTodos({
   onDelNote,
   onReorderSubs,
   onReorderNotes,
+  onMoveChip,
   onEditEmployee,
   onEditChip,
   onDeleteChip,
@@ -6100,6 +6139,7 @@ function DailyTodos({
   onDelNote: (id: string) => void;
   onReorderSubs: (from: number, to: number) => void;
   onReorderNotes: (from: number, to: number) => void;
+  onMoveChip: (list: "daily" | "manager", fromRowIdx: number, fromChipIdx: number, toRowIdx: number, toChipIdx: number) => void;
   onEditEmployee: (id: string, list: "daily" | "manager", newEmployee: string) => void;
   onEditChip: (id: string, list: "daily" | "manager", chipIdx: number, newText: string) => void;
   onDeleteChip: (id: string, list: "daily" | "manager", chipIdx: number) => void;
@@ -6125,6 +6165,9 @@ function DailyTodos({
 
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  // Chip drag state (reorder within a row, or move a chip to another row)
+  const [draggedChip, setDraggedChip] = useState<{ rowIdx: number; chipIdx: number } | null>(null);
+  const [chipDragOver, setChipDragOver] = useState<{ rowIdx: number; chipIdx: number } | null>(null);
   // Section heading state
   const [addingSection, setAddingSection] = useState(false);
   const [sectionInput, setSectionInput] = useState("");
@@ -6680,7 +6723,19 @@ function DailyTodos({
                   cursor: "grab",
                 }}>
                 {isChipTask ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setChipDragOver(null); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (draggedChip) {
+                        onMoveChip(todoTab, draggedChip.rowIdx, draggedChip.chipIdx, index, (chips || []).length);
+                      }
+                      setDraggedChip(null);
+                      setChipDragOver(null);
+                    }}
+                  >
                     {/* Chips */}
                     {chips!.map((chip, idx) => {
                       const hasSubtasks = !!(chip.subtasks && chip.subtasks.length > 0);
@@ -6693,7 +6748,44 @@ function DailyTodos({
                       const isOpenPopover = openSubtaskPopover?.id === item.id && openSubtaskPopover?.chipIdx === idx;
 
                       return (
-                        <div key={idx} style={{ position: "relative", display: "inline-flex", alignItems: "stretch", zIndex: isOpenPopover ? 60 : undefined }}>
+                        <div
+                          key={idx}
+                          draggable={!isEditingThis}
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            setDraggedChip({ rowIdx: index, chipIdx: idx });
+                            e.dataTransfer.effectAllowed = "move";
+                            try { e.dataTransfer.setData("text/plain", chip.text); } catch {}
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setChipDragOver({ rowIdx: index, chipIdx: idx });
+                          }}
+                          onDragLeave={() => {
+                            setChipDragOver((cur) => (cur && cur.rowIdx === index && cur.chipIdx === idx ? null : cur));
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (draggedChip && !(draggedChip.rowIdx === index && draggedChip.chipIdx === idx)) {
+                              onMoveChip(todoTab, draggedChip.rowIdx, draggedChip.chipIdx, index, idx);
+                            }
+                            setDraggedChip(null);
+                            setChipDragOver(null);
+                          }}
+                          onDragEnd={() => { setDraggedChip(null); setChipDragOver(null); }}
+                          title="Drag to reorder — drop on another task to move it there, or on another row to move it to that row"
+                          style={{
+                            position: "relative", display: "inline-flex", alignItems: "stretch",
+                            zIndex: isOpenPopover ? 60 : undefined,
+                            opacity: draggedChip && draggedChip.rowIdx === index && draggedChip.chipIdx === idx ? 0.4 : 1,
+                            cursor: isEditingThis ? "default" : "grab",
+                            outline: chipDragOver && chipDragOver.rowIdx === index && chipDragOver.chipIdx === idx ? "2px solid #2563EB" : "none",
+                            outlineOffset: 1,
+                            borderRadius: 20,
+                          }}
+                        >
                           {isEditingThis ? (
                             <input
                               autoFocus
