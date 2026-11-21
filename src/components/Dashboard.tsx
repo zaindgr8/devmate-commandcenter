@@ -3,11 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Target, Calendar, LogOut, ChevronLeft, ChevronRight,
-  Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers, Flag, GripVertical
+  Plus, Star, Flame, CheckCircle2, Undo2, CalendarCheck, Circle, Loader2, Trash2, MessageSquare, Moon, Smartphone, Archive, Download, ExternalLink, Image as ImageIcon, Banknote, Folders, Users, Clock, ChevronDown, ChevronUp, X, Pencil, MapPin, Tag, Filter, Repeat, ArrowRight, Layers, Flag, GripVertical, StickyNote
 } from "lucide-react";
+import { to12h } from "@/lib/stateUtils";
 import { loadState, saveState, createDayData, logout, calculateStreaks, getToday, STATE_CONFLICT_EVENT, STATE_REFRESHED_EVENT } from "@/lib/store";
-import { AppState, Goal, Priority, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
+import { AppState, Goal, MainTask, SubTask, ManagerNote, Status, User, Project, Employee, Meeting, EventItem, EventCategory, EventRecurrence, TaskChip, SubTaskItem } from "@/lib/types";
 import GoalPanel from "./GoalPanel";
+import PrioritiesPanel from "./PrioritiesPanel";
+import AssistantBar from "./AssistantBar";
 import TimelineView from "./TimelineView";
 import AppTrackerPanel from "./AppTrackerPanel";
 import ContentCreationPanel from "./ContentCreationPanel";
@@ -570,7 +573,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
   const [tab, setTab] = useState<"tasks" | "goals" | "apptracker" | "content" | "history" | "projects" | "employees">("tasks");
   const [mNote, setMNote] = useState("");
   const [draggedGoal, setDraggedGoal] = useState<string | null>(null);
-  const [draggedPriority, setDraggedPriority] = useState<string | null>(null);
 
 
   const [activeSlide, setActiveSlide] = useState<"timeline" | "tables">("timeline");
@@ -1812,7 +1814,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
             {([
               ["tasks", LayoutDashboard, "Daily Tasks"],
               ["goals", Target, "Goal Tracker"],
-              ["history", Archive, "History"],
             ] as const).map(([id, Icon, label]) => (
               <button key={id} onClick={() => setTab(id as any)} style={navBtn(tab === id)}>
                 <Icon size={17} /> {label}
@@ -1823,7 +1824,6 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
               Tracker
             </div>
             {([
-              ["apptracker", Smartphone, "App Tracker"],
               ["content", ImageIcon, "Content Tracker"],
             ] as const).map(([id, Icon, label]) => (
               <button key={id} onClick={() => setTab(id as any)} style={navBtn(tab === id)}>
@@ -2383,6 +2383,11 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                         }));
                       }
                     }}
+                    onSetNotes={(id, list, notes) => {
+                      const v = notes.trim() ? notes : undefined;
+                      if (list === "daily") setDay((d) => ({ ...d, subTasks: d.subTasks.map((s) => s.id === id ? { ...s, notes: v } : s) }));
+                      else setDay((d) => ({ ...d, managerNotes: d.managerNotes.map((n) => n.id === id ? { ...n, notes: v } : n) }));
+                    }}
                     onDeleteSubtask={(id, list, chipIdx, subtaskIdx) => {
                       const updateChips = (chips: TaskChip[]) => {
                         return chips.map((c, i) => {
@@ -2605,37 +2610,19 @@ export default function Dashboard({ user, onLogout }: { user: User; onLogout: ()
                   />
 
                   {/* ─── PRIORITIES SECTION (Displayed directly after Goals) ─── */}
-                  <PrioritiesOverviewSection
+                  <PrioritiesPanel
                     priorities={state.priorities || []}
+                    categories={state.priorityCategories || []}
                     cardStyle={card}
                     inputStyle={inp}
-                    draggedPriority={draggedPriority}
-                    setDraggedPriority={setDraggedPriority}
-                    onAddPriority={(text) => {
-                      const p: Priority = { id: "p_" + Date.now(), text };
-                      save({ ...state, priorities: [...(state.priorities || []), p] });
-                    }}
-                    onUpdatePriority={(id, text) => {
-                      save({
-                        ...state,
-                        priorities: (state.priorities || []).map((p) => (p.id === id ? { ...p, text } : p)),
-                      });
-                    }}
-                    onDeletePriority={(id) => {
-                      save({
-                        ...state,
-                        priorities: (state.priorities || []).filter((p) => p.id !== id),
-                      });
-                    }}
-                    onReorderPriorities={(newPriorities) => {
-                      save({ ...state, priorities: newPriorities });
-                    }}
+                    onChange={(priorities, priorityCategories) => save({ ...state, priorities, priorityCategories })}
                   />
 
                 </div>
             </div>
           </div>
         </main>
+        <AssistantBar state={state} onSave={save} />
       </div>
 
       {/* ─── Toast (undo / sync messages) ─── */}
@@ -2851,7 +2838,7 @@ function MeetingsAndEventsSection({
     onAddMeeting({
       projectId: proj,
       employeeIds: emps,
-      time: meetingTime.trim(),
+      time: to12h(meetingTime),
       date: targetDate,
       status: "not_started",
     });
@@ -2882,7 +2869,7 @@ function MeetingsAndEventsSection({
     onAddEvent({
       title: eventTitle.trim(),
       category: eventCategory,
-      time: eventTime.trim() || undefined,
+      time: to12h(eventTime) || undefined,
       location: eventLocation.trim() || undefined,
       date: targetDate,
       recurrence: eventRecurrence,
@@ -2909,7 +2896,7 @@ function MeetingsAndEventsSection({
     if (!editMeetingTitle.trim()) return;
     onEditMeeting?.(id, {
       projectId: editMeetingTitle.trim(),
-      time: editMeetingTime.trim(),
+      time: to12h(editMeetingTime),
       date: editMeetingDate || currentDate,
     });
     setEditingMeetingId(null);
@@ -2920,7 +2907,7 @@ function MeetingsAndEventsSection({
     onEditEvent?.(id, {
       title: editEventTitle.trim(),
       category: editEventCategory,
-      time: editEventTime.trim() || undefined,
+      time: to12h(editEventTime) || undefined,
       location: editEventLocation.trim() || undefined,
       date: editEventDate || currentDate,
       recurrence: editEventRecurrence,
@@ -3750,7 +3737,7 @@ function MeetingsAndEventsSection({
                                   }}
                                 >
                                   <Clock size={11} color="#A8A29E" style={{ flexShrink: 0 }} />
-                                  {m.time}
+                                  {to12h(m.time)}
                                 </span>
 
                                 {/* Date Badge */}
@@ -4611,7 +4598,7 @@ function MeetingsAndEventsSection({
                                   {evt.time && (
                                     <span style={{ display: "inline-flex", alignItems: "center", gap: 3, whiteSpace: "nowrap", flexShrink: 0 }}>
                                       <Clock size={11} color="#A8A29E" style={{ flexShrink: 0 }} />
-                                      {evt.time}
+                                      {to12h(evt.time)}
                                     </span>
                                   )}
                                   {evt.location && (
@@ -5545,384 +5532,6 @@ function GoalsOverviewSection({
   );
 }
 
-/* ─── Priorities Overview Section Component (Displayed After Goals) ─── */
-interface PrioritiesOverviewSectionProps {
-  priorities: Priority[];
-  cardStyle: React.CSSProperties;
-  inputStyle: React.CSSProperties;
-  draggedPriority: string | null;
-  setDraggedPriority: (id: string | null) => void;
-  onAddPriority: (text: string) => void;
-  onUpdatePriority: (id: string, text: string) => void;
-  onDeletePriority: (id: string) => void;
-  onReorderPriorities: (newPriorities: Priority[]) => void;
-}
-
-function PrioritiesOverviewSection({
-  priorities,
-  cardStyle,
-  inputStyle,
-  draggedPriority,
-  setDraggedPriority,
-  onAddPriority,
-  onUpdatePriority,
-  onDeletePriority,
-  onReorderPriorities,
-}: PrioritiesOverviewSectionProps) {
-  const [prioritiesOpen, setPrioritiesOpen] = useState(false);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newText, setNewText] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
-
-  const handleCreate = () => {
-    if (!newText.trim()) return;
-    onAddPriority(newText.trim());
-    setNewText("");
-    setShowAddForm(false);
-  };
-
-  const handleSaveEdit = (id: string) => {
-    if (!editText.trim()) return;
-    onUpdatePriority(id, editText.trim());
-    setEditingId(null);
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, borderTop: "1px solid #E7E5E4", paddingTop: 18, marginTop: 16 }}>
-      {/* ── Top Header Toolbar matching Goals ── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: prioritiesOpen ? 4 : 0,
-        }}
-      >
-        <div
-          onClick={() => setPrioritiesOpen(!prioritiesOpen)}
-          style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
-          title="Click dropdown chevron to toggle Priorities"
-        >
-          <button
-            type="button"
-            style={{
-              background: "none",
-              border: "none",
-              padding: 0,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              color: "#78716C",
-            }}
-          >
-            {prioritiesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </button>
-          <Flag size={13} color="#2563EB" />
-          <h3
-            style={{
-              fontSize: 10,
-              fontWeight: 800,
-              textTransform: "uppercase",
-              letterSpacing: 1.2,
-              color: "#78716C",
-              margin: 0,
-            }}
-          >
-            Priorities
-          </h3>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: "1px 6px",
-              borderRadius: 10,
-              background: "#EFF6FF",
-              color: "#2563EB",
-            }}
-          >
-            {priorities.length}
-          </span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {!showAddForm && (
-            <button
-              onClick={() => {
-                setPrioritiesOpen(true);
-                setShowAddForm(true);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#2563EB",
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-              }}
-              title="Add a new priority"
-            >
-              <Plus size={12} /> Add
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* ── Section Body ── */}
-      {prioritiesOpen && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* Quick Add Priority Form */}
-          {showAddForm && (
-            <div
-              style={{
-                ...cardStyle,
-                padding: 12,
-                background: "#FAFAF9",
-                border: "1.5px solid #DBEAFE",
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#1E3A8A" }}>New Priority</span>
-                <button
-                  onClick={() => setShowAddForm(false)}
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "#78716C", padding: 0 }}
-                >
-                  <X size={13} />
-                </button>
-              </div>
-
-              <input
-                type="text"
-                placeholder="Priority (e.g. Close Ashul pilot)"
-                value={newText}
-                onChange={(e) => setNewText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") setShowAddForm(false); }}
-                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }}
-                autoFocus
-              />
-
-              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                <button
-                  onClick={handleCreate}
-                  style={{
-                    flex: 1,
-                    padding: "6px 0",
-                    borderRadius: 7,
-                    border: "none",
-                    background: "#2563EB",
-                    color: "#fff",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
-                >
-                  Save Priority
-                </button>
-                <button
-                  onClick={() => setShowAddForm(false)}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: 7,
-                    border: "1px solid #E7E5E4",
-                    background: "#fff",
-                    color: "#78716C",
-                    fontSize: 11,
-                    cursor: "pointer",
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Priorities List */}
-          {priorities.length === 0 ? (
-            <div
-              style={{
-                textAlign: "center",
-                padding: "16px 0",
-                color: "#A8A29E",
-                border: "1px dashed #E7E5E4",
-                borderRadius: 10,
-              }}
-            >
-              <Flag size={18} style={{ margin: "0 auto 4px", opacity: 0.4 }} />
-              <p style={{ fontSize: 11, margin: 0 }}>No priorities yet. Add your first one.</p>
-            </div>
-          ) : (
-            priorities.map((priority, index) => {
-              const isEditing = editingId === priority.id;
-
-              return (
-                <div
-                  key={priority.id}
-                  draggable={!isEditing}
-                  onDragStart={(e) => {
-                    setDraggedPriority(priority.id);
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (draggedPriority && draggedPriority !== priority.id) {
-                      const newPriorities = [...priorities];
-                      const sIdx = newPriorities.findIndex((p) => p.id === draggedPriority);
-                      const tIdx = newPriorities.findIndex((p) => p.id === priority.id);
-                      if (sIdx !== -1 && tIdx !== -1) {
-                        const [rem] = newPriorities.splice(sIdx, 1);
-                        newPriorities.splice(tIdx, 0, rem);
-                        onReorderPriorities(newPriorities);
-                      }
-                    }
-                    setDraggedPriority(null);
-                  }}
-                  onDragEnd={() => setDraggedPriority(null)}
-                  style={{
-                    ...cardStyle,
-                    padding: "10px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    position: "relative",
-                    opacity: draggedPriority === priority.id ? 0.4 : 1,
-                    cursor: isEditing ? "default" : "grab",
-                    transition: "box-shadow 0.15s",
-                  }}
-                  onMouseEnter={(e) => {
-                    const btns = e.currentTarget.querySelectorAll(".priority-action-btn") as NodeListOf<HTMLElement>;
-                    btns.forEach((b) => { b.style.opacity = "1"; });
-                  }}
-                  onMouseLeave={(e) => {
-                    const btns = e.currentTarget.querySelectorAll(".priority-action-btn") as NodeListOf<HTMLElement>;
-                    btns.forEach((b) => { b.style.opacity = "0"; });
-                  }}
-                >
-                  <GripVertical size={14} color="#D6D3D1" style={{ flexShrink: 0 }} />
-
-                  {/* Rank */}
-                  <span
-                    style={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: 10,
-                      background: "#EFF6FF",
-                      color: "#2563EB",
-                      fontSize: 10,
-                      fontWeight: 800,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                  >
-                    {index + 1}
-                  </span>
-
-                  {isEditing ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
-                      <input
-                        autoFocus
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleSaveEdit(priority.id); if (e.key === "Escape") setEditingId(null); }}
-                        style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", flex: 1, minWidth: 0 }}
-                      />
-                      <button
-                        onClick={() => handleSaveEdit(priority.id)}
-                        style={{
-                          padding: "3px 10px",
-                          fontSize: 10,
-                          fontWeight: 600,
-                          background: "#2563EB",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: 5,
-                          cursor: "pointer",
-                          flexShrink: 0,
-                        }}
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={() => setEditingId(null)}
-                        style={{
-                          padding: "3px 8px",
-                          fontSize: 10,
-                          background: "none",
-                          border: "1px solid #E7E5E4",
-                          borderRadius: 5,
-                          cursor: "pointer",
-                          color: "#78716C",
-                          flexShrink: 0,
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <span
-                        onDoubleClick={() => {
-                          setEditingId(priority.id);
-                          setEditText(priority.text);
-                        }}
-                        title="Double-click to edit priority"
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: "#1C1917",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          cursor: "pointer",
-                          flex: 1,
-                          minWidth: 0,
-                        }}
-                      >
-                        {priority.text}
-                      </span>
-
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Delete priority "${priority.text}"?`)) {
-                            onDeletePriority(priority.id);
-                          }
-                        }}
-                        className="priority-action-btn"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: "#EF4444",
-                          opacity: 0,
-                          cursor: "pointer",
-                          padding: 2,
-                          borderRadius: 4,
-                          transition: "opacity 0.1s",
-                          flexShrink: 0,
-                        }}
-                        title="Delete priority"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ─── History ─── */
 function HistoryView({ state, onGo }: { state: AppState; onGo: (d: string) => void }) {
   const dates = Object.keys(state.days).sort().reverse();
@@ -6077,6 +5686,7 @@ function DailyTodos({
   onAddSubtaskToChip,
   onEditSubtask,
   onDeleteSubtask,
+  onSetNotes,
   mNote,
   setMNote,
   projects,
@@ -6108,12 +5718,16 @@ function DailyTodos({
   onAddSubtaskToChip: (id: string, list: "daily" | "manager", chipIdx: number, text: string) => void;
   onEditSubtask: (id: string, list: "daily" | "manager", chipIdx: number, subtaskIdx: number, text: string) => void;
   onDeleteSubtask: (id: string, list: "daily" | "manager", chipIdx: number, subtaskIdx: number) => void;
+  onSetNotes: (id: string, list: "daily" | "manager", notes: string) => void;
   mNote: string;
   setMNote: (v: string) => void;
   projects: Project[];
   employees: Employee[];
 }) {
   const [todoTab, setTodoTab] = useState<"daily" | "manager">("daily");
+  const [notesFor, setNotesFor] = useState<{ id: string; title: string } | null>(null);
+  const [notesDraft, setNotesDraft] = useState("");
+  const closeNotes = () => { if (notesFor) onSetNotes(notesFor.id, todoTab, notesDraft); setNotesFor(null); };
   const [taskInput, setTaskInput] = useState("");
   const [personInput, setPersonInput] = useState("");
   const [pendingChips, setPendingChips] = useState<TaskChip[]>([]);
@@ -6570,6 +6184,32 @@ function DailyTodos({
         </div>
       </div>
 
+      {notesFor && (
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) closeNotes(); }}
+          onKeyDown={(e) => { if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) closeNotes(); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(28,25,23,0.35)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        >
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 520, boxShadow: "0 20px 50px rgba(28,25,23,0.25)", borderTop: "4px solid #8B5CF6", padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "#1C1917" }}>{notesFor.title} · Notes</span>
+              <button onClick={closeNotes} style={{ background: "none", border: "none", cursor: "pointer", color: "#A8A29E", display: "flex" }}><X size={16} /></button>
+            </div>
+            <textarea
+              autoFocus
+              value={notesDraft}
+              onChange={(e) => setNotesDraft(e.target.value)}
+              placeholder="Notes"
+              rows={12}
+              style={{ ...inp, fontSize: 13, lineHeight: 1.5, padding: "10px 12px", resize: "vertical", minHeight: 220 }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={closeNotes} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#1C1917", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {currentList.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {currentList.map((item, index) => {
@@ -6657,7 +6297,7 @@ function DailyTodos({
               <div
                 key={item.id}
                 draggable
-                onDragStart={() => setDragIdx(index)}
+                onDragStart={(e) => { setDragIdx(index); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", item.id); }}
                 onDragEnd={() => { setDragIdx(null); setDragOver(null); }}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(index); }}
                 onDrop={() => {
@@ -6678,7 +6318,10 @@ function DailyTodos({
                   transform: isOver && !isDragging ? "scale(1.01)" : "scale(1)",
                   boxShadow: isOver && !isDragging ? "0 4px 16px rgba(37,99,235,0.13)" : undefined,
                   cursor: "grab",
+                  paddingRight: 64,
                 }}>
+                {/* drag handle */}
+                <span title="Drag to reorder" style={{ position: "absolute", left: 3, top: "50%", transform: "translateY(-50%)", color: "#D6D3D1", fontSize: 13, lineHeight: 1, userSelect: "none", cursor: "grab" }}>⠿</span>
                 {isChipTask ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {/* Chips */}
@@ -7149,6 +6792,15 @@ function DailyTodos({
                     </div>
                   </div>
                 )}
+                <button
+                  onClick={() => { setNotesFor({ id: item.id, title: employee ? `@${employee}` : ((item as any).text || (item as any).content || "Task") }); setNotesDraft(((item as any).notes as string) || ""); }}
+                  title={(item as any).notes ? "Open notes" : "Add notes"}
+                  style={{ position: "absolute", right: 36, top: "50%", transform: "translateY(-50%)", padding: 4, opacity: (item as any).notes ? 0.9 : 0.3, transition: "opacity 0.15s", color: (item as any).notes ? "#D97706" : "#78716C", background: "none", border: "none", cursor: "pointer", display: "flex" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = (item as any).notes ? "0.9" : "0.3")}
+                >
+                  <StickyNote size={13} />
+                </button>
                 <button
                   onClick={() => todoTab === "daily" ? onDelSub(item.id) : onDelNote(item.id)}
                   style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", padding: 4, opacity: 0.3, transition: "opacity 0.15s", color: "#EF4444" }}

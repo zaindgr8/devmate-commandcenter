@@ -66,6 +66,7 @@ export function createEmptyState(): AppState {
     days: { [td]: createDayData(td) },
     goals: [...DEFAULT_GOALS],
     priorities: [],
+    priorityCategories: [],
     streaks: { sleep: 0, workout: 0 },
     categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" },
     appTrackers: [],
@@ -102,5 +103,32 @@ export function normalizeState(parsed: AppState): AppState {
   if (!parsed.employees) parsed.employees = [];
   if (!parsed.recurringEvents) parsed.recurringEvents = [];
   if (!parsed.priorities) parsed.priorities = [];
+  if (!parsed.priorityCategories) parsed.priorityCategories = [];
   return cleanStateOfFatima(parsed);
+}
+
+/**
+ * Normalises any time the user (or the assistant) typed to 12-hour "3:00 PM".
+ * "15:00" → "3:00 PM", "3pm" → "3:00 PM", "0930" → "9:30 AM".
+ * Bare hours 1–12 with no AM/PM use the app's existing rule: 8–11 → AM, otherwise PM.
+ * Anything that isn't a time ("Scheduled", "TBD") is returned unchanged.
+ */
+export function to12h(raw?: string): string {
+  if (!raw) return "";
+  const t = raw.trim();
+  const m = t.match(/^(\d{1,2})(?::?(\d{2}))?\s*([ap])?\.?\s*m?\.?$/i);
+  if (!m) return t;
+  let h = parseInt(m[1], 10);
+  const min = m[2] ?? "00";
+  if (h > 23 || parseInt(min, 10) > 59) return t;
+  let ampm: "AM" | "PM";
+  if (m[3]) {
+    ampm = m[3].toLowerCase() === "a" ? "AM" : "PM";
+    if (h === 0) h = 12;
+    if (h > 12) h -= 12;
+  } else if (h === 0) { h = 12; ampm = "AM"; }
+  else if (h > 12) { h -= 12; ampm = "PM"; }
+  else if (h === 12) ampm = "PM";
+  else ampm = h >= 8 && h <= 11 ? "AM" : "PM";
+  return `${h}:${min} ${ampm}`;
 }

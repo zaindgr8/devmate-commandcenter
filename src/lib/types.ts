@@ -37,6 +37,7 @@ export interface SubTask {
   employee?: string;
   chips?: TaskChip[];
   isSection?: boolean; // when true, renders as a named category heading, not a task
+  notes?: string;
 }
 
 export interface Goal {
@@ -48,9 +49,25 @@ export interface Goal {
   color: string;
 }
 
+// "active" / "waiting" are legacy values (read as not_started / pending)
+export type PriorityStatus = "not_started" | "pending" | "top" | "done" | "active" | "waiting";
+
+export interface PriorityCategory {
+  id: string;
+  name: string;
+  color: string;
+  collapsed?: boolean;
+}
+
 export interface Priority {
   id: string;
   text: string;
+  categoryId?: string;       // undefined → "Uncategorized"
+  status?: PriorityStatus;   // undefined → "not_started"; only ever changed by the user
+  topRank?: number;          // position in the combined Top list
+  doneAt?: string;           // local YYYY-MM-DD it was marked Done; deleted once that day is over
+  notes?: string;            // free-form notes, edited in the double-click modal
+  touchedAt?: string;        // ISO timestamp of last change, drives the staleness badge
 }
 
 export interface ManagerNote {
@@ -61,6 +78,7 @@ export interface ManagerNote {
   timestamp: number;
   employee?: string;
   chips?: TaskChip[];
+  notes?: string;
 }
 
 export interface Meeting {
@@ -174,6 +192,7 @@ export interface AppState {
   days: Record<string, DayData>;
   goals: Goal[];
   priorities?: Priority[];
+  priorityCategories?: PriorityCategory[];
   streaks: Record<string, number>; // task id -> streak count
   categoryLabels?: Record<string, string>;
   appTrackers?: AppTracker[];

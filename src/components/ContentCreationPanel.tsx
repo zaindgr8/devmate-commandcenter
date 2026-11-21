@@ -30,7 +30,7 @@ import {
   Archive,
   RotateCcw,
   Eye,
-  Send,
+  Circle,
 } from "lucide-react";
 
 /* ─── constants ─── */
@@ -78,7 +78,6 @@ const uid = (p: string) => `${p}_${Date.now().toString(36)}${Math.random().toStr
 
 const now = () => Date.now();
 
-const isUrl = (s: string) => /^https?:\/\/\S+$/i.test(s.trim());
 
 function detectPlatform(url: string): ContentPlatform {
   const u = url.toLowerCase();
@@ -208,6 +207,7 @@ export default function ContentCreationPanel({
   };
   const [openId, setOpenId] = useState<string | null>(null);
   const [capture, setCapture] = useState("");
+  const [captureLink, setCaptureLink] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -235,24 +235,84 @@ export default function ContentCreationPanel({
   const activeFor = (p: ContentPlatform) => ideas.filter((i) => i.platform === p && ACTIVE_STAGES.includes(i.stage)).length;
   const inProduction = active.filter((i) => i.stage !== "idea").length;
 
-  /* ── capture: always lands in the platform you are on ── */
-  const addIdea = () => {
-    const text = capture.trim();
-    if (!text) return;
-    const url = isUrl(text);
-    const idea: ContentIdea = {
+  /* ── capture ──
+     One line = one idea. Lands in the platform you are on unless routed.
+     - paste several lines → one idea per line (brain dump)
+     - "@yt / @ig / @li" anywhere → send to that platform
+     - "Title | hook"     → saves the hook too
+     - a link anywhere    → attached as reference, rest becomes the title
+     - Shift+Enter        → add to the top as UP NEXT                       */
+  const captureRef = React.useRef<HTMLInputElement>(null);
+  const [flash, setFlash] = useState("");
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); captureRef.current?.focus(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const parseLine = (raw: string): ContentIdea | null => {
+    let text = raw.trim().replace(/^[-*•\d.)\s]+(?=\S)/, "").trim(); // strip list bullets / numbering
+    if (!text) return null;
+    let target: ContentPlatform = platform;
+    const route = text.match(/(^|\s)@(yt|youtube|ig|insta|instagram|li|linkedin)\b/i);
+    if (route) {
+      const k = route[2].toLowerCase();
+      target = k.startsWith("y") ? "YouTube" : k.startsWith("l") ? "LinkedIn" : "Instagram";
+      text = text.replace(route[0], " ").trim();
+    }
+    const urlMatch = text.match(/https?:\/\/\S+/i);
+    const url = urlMatch?.[0];
+    if (url) text = text.replace(url, " ").replace(/\s+/g, " ").trim();
+    let hook: string | undefined;
+    const bar = text.indexOf("|");
+    if (bar !== -1) { hook = text.slice(bar + 1).trim() || undefined; text = text.slice(0, bar).trim(); }
+    if (!text && !url) return null;
+    return {
       id: uid("ci"),
-      title: url ? `Idea from ${linkLabel(text)}` : text,
-      platform,
-      format: formatsFor(platform)[0], // not shown in the UI; kept for the data shape
+      title: text || `Idea from ${linkLabel(url!)}`,
+      hook,
+      platform: target,
+      format: formatsFor(target)[0], // not shown in the UI; kept for the data shape
       stage: "idea",
-      links: url ? [{ id: uid("l"), label: "Reference", url: text }] : [],
+      links: url ? [{ id: uid("l"), label: "Reference", url }] : [],
       createdAt: now(),
     };
-    // New ideas go to the bottom of the queue
-    saveIdeas([...ideas, idea]);
+  };
+
+  const addIdeas = (lines: string[], toTop = false) => {
+    const fresh = lines.map(parseLine).filter((x): x is ContentIdea => !!x);
+    if (!fresh.length) return;
+    let next: ContentIdea[];
+    if (toTop) {
+      // insert before the first active idea of each idea's platform
+      next = [...ideas];
+      for (const idea of [...fresh].reverse()) {
+        const idx = next.findIndex((i) => i.platform === idea.platform && ACTIVE_STAGES.includes(i.stage));
+        if (idx === -1) next.push(idea); else next.splice(idx, 0, idea);
+      }
+    } else next = [...ideas, ...fresh];
+    saveIdeas(next);
     setCapture("");
-    if (url) setOpenId(idea.id); // open so the title can be written
+    if (tab !== "queue") setTab("queue");
+    const elsewhere = fresh.filter((i) => i.platform !== platform);
+    const msg = `${fresh.length} idea${fresh.length > 1 ? "s" : ""} added${toTop ? " as Up Next" : ""}` +
+      (elsewhere.length ? ` · ${elsewhere.length} to ${[...new Set(elsewhere.map((i) => i.platform))].join(", ")}` : "");
+    setFlash(msg);
+    window.setTimeout(() => setFlash(""), 2500);
+    if (fresh.length === 1 && fresh[0].title.startsWith("Idea from ") && fresh[0].platform === platform) setOpenId(fresh[0].id);
+  };
+
+  const addIdea = (toTop = false) => {
+    const link = captureLink.trim();
+    const url = link ? (/^https?:\/\//i.test(link) ? link : `https://${link}`) : "";
+    addIdeas([[capture.trim(), url].filter(Boolean).join(" ")], toTop);
+    setCaptureLink("");
+    captureRef.current?.focus();
   };
 
   /* ── reorder (operates on full ideas array, using ids) ── */
@@ -297,7 +357,6 @@ export default function ContentCreationPanel({
   /* ═══ render ═══ */
   const tabs: { id: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
     { id: "queue", label: "Queue", icon: <ListOrdered size={13} />, count: active.length },
-    { id: "posted", label: "Posted", icon: <Send size={13} />, count: posted.length },
     { id: "creators", label: "Creators", icon: <Users size={13} />, count: creators.length },
     { id: "calendar", label: "Calendar", icon: <CalendarDays size={13} /> },
   ];
@@ -341,19 +400,34 @@ export default function ContentCreationPanel({
         })}
       </div>
 
-      {/* Quick capture */}
-      <div style={{ ...card, padding: 10, display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap", borderLeft: `4px solid ${accent}` }}>
-        <Lightbulb size={16} color={accent} style={{ marginLeft: 6, flexShrink: 0 }} />
+      {/* Quick capture: Title + Link */}
+      <div style={{ ...card, padding: 8, display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap", borderLeft: `4px solid ${accent}` }}>
         <input
+          ref={captureRef}
           value={capture}
           onChange={(e) => setCapture(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && addIdea()}
-          placeholder={`New ${platform} idea, or paste a source link`}
-          style={{ ...input, flex: 1, minWidth: 220, border: "none", background: "transparent", fontSize: 14 }}
+          onPaste={(e) => {
+            const txt = e.clipboardData.getData("text");
+            if (/\r?\n/.test(txt.trim())) { e.preventDefault(); addIdeas(txt.split(/\r?\n/)); }
+          }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) addIdea(e.shiftKey); }}
+          placeholder={`Title of the ${platform} idea`}
+          style={{ ...input, flex: "2 1 220px", border: "none", background: "transparent", fontSize: 14 }}
         />
-        <button onClick={addIdea} style={{ ...pillBtn(true), padding: "8px 14px", background: accent, borderColor: accent }}>
-          <Plus size={14} /> Add to {platform}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 160px", borderLeft: "1px solid #F0EEEC", paddingLeft: 10 }}>
+          <Link2 size={14} color="#A8A29E" style={{ flexShrink: 0 }} />
+          <input
+            value={captureLink}
+            onChange={(e) => setCaptureLink(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) addIdea(e.shiftKey); }}
+            placeholder="Link (optional)"
+            style={{ ...input, border: "none", background: "transparent", fontSize: 13, padding: "8px 4px" }}
+          />
+        </div>
+        <button onClick={() => addIdea()} disabled={!capture.trim() && !captureLink.trim()} style={{ ...pillBtn(true), padding: "8px 14px", background: accent, borderColor: accent, opacity: capture.trim() || captureLink.trim() ? 1 : 0.5 }}>
+          <Plus size={14} /> Add
         </button>
+        {flash && <div style={{ flexBasis: "100%", fontSize: 11, color: "#16A34A", fontWeight: 600, padding: "0 10px 2px" }}>{flash}</div>}
       </div>
 
       {/* Tabs */}
@@ -386,9 +460,30 @@ export default function ContentCreationPanel({
                 color={p.color}
               />
             ))}
+            <FilterChip active={stageFilter === "posted"} onClick={() => setStageFilter("posted")} label={`Done ${posted.length}`} color="#16A34A" />
           </div>
 
-          {queue.length === 0 ? (
+          {stageFilter === "posted" ? (
+            posted.length === 0 ? (
+              <Empty text="Nothing done yet. Tick ✓ on an idea when it's posted." />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {posted.map((i) => (
+                  <div key={i.id} style={{ ...card, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderLeft: `4px solid ${accent}` }}>
+                    <button title="Undo: back to queue" style={{ ...iconBtn, color: "#16A34A" }} onClick={() => updateIdea(i.id, { stage: "ready" })}>
+                      <CheckCircle2 size={17} />
+                    </button>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: "#78716C", textDecoration: "line-through", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.title}</span>
+                    {i.links[0] && (
+                      <a href={i.links[0].url} target="_blank" rel="noreferrer" style={iconBtn} title={i.links[0].url}><Link2 size={14} /></a>
+                    )}
+                    <span style={{ fontSize: 11, color: "#A8A29E" }}>{i.postedDate}</span>
+                    <button title="Delete" style={iconBtn} onClick={() => deleteIdea(i.id)}><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : queue.length === 0 ? (
             <Empty
               text={active.length === 0 ? `Your ${platform} queue is empty. Add the first idea above, or paste a link that inspired you.` : "Nothing at this stage."}
             />
@@ -454,40 +549,6 @@ export default function ContentCreationPanel({
             </details>
           )}
         </>
-      )}
-
-      {/* ═══ POSTED ═══ */}
-      {tab === "posted" && (
-        posted.length === 0 ? (
-          <Empty text="Nothing posted yet. Use “Mark posted” on a queued idea and it lands here and on the calendar." />
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {posted.map((i) => (
-              <div key={i.id} style={{ ...card, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <CheckCircle2 size={16} color="#16A34A" />
-                <div style={{ flex: 1, minWidth: 160 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{i.title}</div>
-                  <div style={{ fontSize: 11, color: "#A8A29E" }}>{i.postedDate}</div>
-                </div>
-                
-                <input
-                  value={i.postedUrl || ""}
-                  onChange={(e) => updateIdea(i.id, { postedUrl: e.target.value })}
-                  placeholder="Live post URL"
-                  style={{ ...input, width: 200 }}
-                />
-                {i.postedUrl && isUrl(i.postedUrl) && (
-                  <a href={i.postedUrl} target="_blank" rel="noreferrer" style={iconBtn} title="Open post">
-                    <ExternalLink size={14} />
-                  </a>
-                )}
-                <button title="Back to queue" style={iconBtn} onClick={() => updateIdea(i.id, { stage: "ready" })}>
-                  <RotateCcw size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )
       )}
 
       {/* ═══ CREATORS ═══ */}
@@ -595,8 +656,11 @@ function IdeaRow({
       style={{
         ...card,
         opacity: dragging ? 0.4 : 1,
-        borderColor: dragOver ? "#1C1917" : isNext ? "#FDE68A" : "#F0EEEC",
-        borderWidth: dragOver ? 2 : 1,
+        // Longhand sides only: mixing border shorthands makes React warn on re-render.
+        border: undefined,
+        borderTop: `${dragOver ? 2 : 1}px solid ${dragOver ? "#1C1917" : isNext ? "#FDE68A" : "#F0EEEC"}`,
+        borderRight: `${dragOver ? 2 : 1}px solid ${dragOver ? "#1C1917" : isNext ? "#FDE68A" : "#F0EEEC"}`,
+        borderBottom: `${dragOver ? 2 : 1}px solid ${dragOver ? "#1C1917" : isNext ? "#FDE68A" : "#F0EEEC"}`,
         borderLeft: `4px solid ${PLATFORM_COLOR[idea.platform]}`,
         background: isNext ? "#FFFDF5" : "#fff",
         transition: "border-color .12s, opacity .12s",
@@ -620,8 +684,15 @@ function IdeaRow({
               <Link2 size={11} /> {idea.links.length}
             </span>
           )}
+          {!open && idea.hook && (
+            <span style={{ flexBasis: "100%", fontSize: 12, color: "#78716C", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              “{idea.hook}”
+            </span>
+          )}
         </button>
         <StagePill stage={idea.stage} />
+        <button title="Mark done" style={iconBtn} onClick={onPosted}><Circle size={16} /></button>
+        <button title="Delete idea" style={{ ...iconBtn, color: "#EF4444", opacity: 0.55 }} onClick={onDelete}><Trash2 size={14} /></button>
         <button title="Move up" style={iconBtn} onClick={onUp}><ChevronUp size={15} /></button>
         <button title="Move down" style={iconBtn} onClick={onDown}><ChevronDown size={15} /></button>
       </div>

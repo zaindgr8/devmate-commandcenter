@@ -23,7 +23,7 @@ if (typeof window !== "undefined" && supabase) {
   });
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+export async function authHeaders(): Promise<Record<string, string>> {
   if (supabase) {
     try {
       // getSession refreshes an expired access token using the stored refresh token.
@@ -114,6 +114,7 @@ export async function loadState(): Promise<AppState> {
       if (!parsed.priorities) {
         parsed.priorities = [];
       }
+      if (!parsed.priorityCategories) parsed.priorityCategories = [];
       return cleanStateOfFatima(parsed);
     }
   } catch(err) {
@@ -161,6 +162,7 @@ export async function loadState(): Promise<AppState> {
        if (!parsed.priorities) {
          parsed.priorities = [];
        }
+       if (!parsed.priorityCategories) parsed.priorityCategories = [];
        const cleaned = cleanStateOfFatima(parsed);
        saveState(cleaned);
        return cleaned;
@@ -173,6 +175,7 @@ export async function loadState(): Promise<AppState> {
     days: { [td]: createDayData(td) },
     goals: [...DEFAULT_GOALS],
     priorities: [],
+    priorityCategories: [],
     streaks: { sleep: 0, workout: 0 },
     categoryLabels: { Mandatory: "Mandatory", Company: "Company Tasks", Misc: "Misc" },
     appTrackers: [],
